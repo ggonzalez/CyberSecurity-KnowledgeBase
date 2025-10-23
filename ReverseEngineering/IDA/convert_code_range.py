@@ -9,7 +9,6 @@ def make_functions_in_range(start_ea, end_ea):
     failed_addrs = []
 
     while ea < end_ea:
-        print("{0:X} - {1:X}".format(ea, end_ea))
         if idc.is_unknown(idc.get_full_flags(ea)):
             func_start = ea
             
