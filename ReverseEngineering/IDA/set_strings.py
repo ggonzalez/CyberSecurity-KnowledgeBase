@@ -17,7 +17,7 @@ EN_FREQ = {
 
 # --- Simple English word list (extendable) ---
 try:
-    with open("/usr/share/dict/words") as f:
+    with open("/Users/ggonzalez/bin/words_alpha.txt") as f:
         DICT = set(x.strip().lower() for x in f)
 except:
     # fallback tiny dictionary
@@ -63,24 +63,31 @@ def looks_english(s):
         return False
 
     # printable & allowed char ratio
-    allowed = sum(c.isalnum() or c in " .,:;'-_/" for c in s)
+    allowed = sum(c.isalnum() or c in " .,:;'-_/%[]{}()" for c in s)
     if allowed / len(s) < 0.85:
         return False
 
     # dictionary heuristic
-    tokens = re.findall(r"[A-Za-z]+", s.lower())
-    #print("[DEBUG] token", tokens)
+    tokens = re.findall(r"[A-Za-z_]+", s.lower())
+    print("[DEBUG] token", tokens)
     dict_hits = sum(1 for t in tokens if len(t) > 3 and t in DICT)
     if dict_hits >= 1:
-        #print("[DEBUG]: Passed dict")
+        print("[DEBUG]: Passed dict")
         return True
-
+    '''
     # chi-square test (English ≈ low chi²)
     chi = chi_square_english_score(s)
+    print(f"[DEBUG] {chi}")
     if chi < 100:  # good threshold
         #print("[DEBUG]: Passed Xsquare")
         return True
-
+    '''
+    chi_hits = sum(1 for t in tokens if chi_square_english_score(t) < 100)
+    print(chi_hits)
+    if chi_hits >= 2:
+      print("[DEBUG]: Chi passed")
+      return True
+        
     # bigram score
     if english_bigram_score(s) > 0.03:
         #print("[DEBUG]: Passed bigram")
@@ -100,10 +107,12 @@ def set_all_strings():
         ea = s.ea
         text = str(s)
         len_s = len(text)
-        #print(f"0x{ea:X}: {text} {len_s}")
-        if looks_english(text):
+        print(f"0x{ea:X}: {text} {len_s}")
+        if looks_english(text.strip()):
             ida_bytes.create_strlit(ea, len_s + 1, ida_nalt.STRTYPE_C)
+            print("Created")
         else:
-            print("Skipping: 0x{ea:X}: {text} {len_s}")
+            print(f"Skipping: 0x{ea:X}: {text} {len_s}")
 
 set_all_strings()
+
