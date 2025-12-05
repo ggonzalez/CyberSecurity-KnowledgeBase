@@ -27,7 +27,7 @@ EN_FREQ = {
 
 # --- Simple English word list (extendable) ---
 try:
-    with open("/Users/ggonzalez/bin/words_alpha.txt") as f:
+    with open("words_alpha.txt") as f:
         DICT = set(x.strip().lower() for x in f)
 except:
    # fallback tiny dictionary
