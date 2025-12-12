@@ -1,8 +1,19 @@
+####### 
+### Set only those strings that look like English-readable text in IDA Pro.
+###
+### Gabriel Gonzalez Garcia - www.gabrielcybersecurity.com
+###
 import idautils
 import ida_nalt
+import ipaddress
+import argparse
 import math
+import sys
 import re
 from collections import Counter
+
+
+debug_enabled = False
 
 # --- English letter frequencies (normalized) ---
 EN_FREQ = {
@@ -17,14 +28,40 @@ EN_FREQ = {
 
 # --- Simple English word list (extendable) ---
 try:
-    with open("/Users/ggonzalez/bin/words_alpha.txt") as f:
+    with open("words_alpha.txt") as f:
         DICT = set(x.strip().lower() for x in f)
 except:
-    # fallback tiny dictionary
+   # fallback tiny dictionary
     DICT = {"error", "file", "user", "login", "network", "version", "failed", "success", "config", "system"}
 
 
-# -------------------------------------------------------
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Filter strings and keep only valid English-like readable text."
+    )
+
+    parser.add_argument(
+        "-n", "--negate",
+        action="store_true",
+        help="Print rejected strings instead of accepted ones."
+    )
+
+    parser.add_argument(
+        "-d", "--debug",
+        action="store_true",
+        help="Print debugging info from the different heuristics."
+    )
+
+    parser.add_argument(
+        "input",
+        nargs="?",
+        type=str,
+        default="-",
+        help="Only works with stdin. Useful for piping `strings` output."
+    )
+
+    return parser.parse_args()
+
 
 def chi_square_english_score(s):
     s = ''.join([c for c in s.lower() if c.isalpha()])
@@ -55,47 +92,177 @@ def english_bigram_score(s):
         score += bigram_freq.get(bg, 0)
     return score
 
-# -------------------------------------------------------
+def printf_format_match(s):
+    ret_tokens = []
+
+    tin = s.split()
+
+    format_str  = re.compile(
+       r'''
+       (?:0x)?                # Optional 0x prefix
+       %
+       (?:[-+ #0]*)           # Optional flags
+       (?:\d+)?               # Optional width
+       (?:\.\d+)?             # Optional precision
+       (?:hh|h|ll|l|j|z|t|L)? # Optional length modifier
+       (?:
+           [diuoxXfFeEgGaAcspn%] | # Standard specifiers
+           \[[^\]]*\]              # Scanset, e.g. %[^...]
+       )
+       ''',
+       re.VERBOSE
+    )
+
+    for t in tin:
+       fmt = format_str.findall(t)
+       for f in fmt:
+          ret_tokens.append(f)
+
+    return ret_tokens
+
+def tokenize_c_string(s: str):
+    """
+    NOT YET 
+    Tokenize C-style strings and identifiers, including splitting camelCase,
+    PascalCase, and mixed alphanumeric segments.
+    """
+    # 1. Replace all non-alphanumerics with space
+    s = re.sub(r'[^A-Za-z0-9]+', ' ', s)
+
+    # 2. Split into "raw tokens" split on whitespace
+    raw_tokens = s.split()
+
+    final_tokens = []
+
+    camel_case_pattern = re.compile(
+        r'''
+        [A-Z]+(?=[A-Z][a-z]) |   # XML in XMLHttpRequest
+        [A-Z]?[a-z]+           | # Words: add, Item, Request
+        [A-Z]+                 | # All caps words
+        \d+                      # Numbers
+        ''',
+        re.VERBOSE
+    )
+
+    for tok in raw_tokens:
+        # Detect CamelCase / mixedCase / PascalCase / letters+numbers
+        parts = camel_case_pattern.findall(tok)
+        for p in parts:
+            final_tokens.append(p.lower())
+
+    return final_tokens
+
+def is_ip(s: str) -> bool:
+    """
+    Returns True if string is a valid IPv4 or IPv6 address (optionally with /mask).
+    Uses ipaddress for reliability.
+    """
+    try:
+        # Handle "IP" or "IP/mask"
+        if "/" in s:
+            ipaddress.ip_network(s, strict=False)
+        else:
+            ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+def is_oid(s: str) -> bool:
+    _oid_re = re.compile(r"^[0-2](?:\.\d+)*$")
+    """
+    Returns True if string is a valid SNMP numeric OID.
+    Valid examples:
+      1.3.6.1.2.1
+      1.3.6.1.4.1.2021.4.5
+    """
+    if not _oid_re.match(s):
+        return False
+
+    # Additional sanity checks (optional)
+    try:
+        parts = s.split(".")
+        return all(int(p) >= 0 for p in parts)
+    except ValueError:
+        return False
 
 def looks_english(s):
-    # length check
-    if len(s) < 4:
-        return False
-
     # printable & allowed char ratio
     allowed = sum(c.isalnum() or c in " .,:;'-_/%[]{}()" for c in s)
-    if allowed / len(s) < 0.85:
-        return False
 
     # dictionary heuristic
-    tokens = re.findall(r"[A-Za-z_]+", s.lower())
-    print("[DEBUG] token", tokens)
+    tokens = re.findall(r"[A-Za-z]+", s.lower())
     dict_hits = sum(1 for t in tokens if len(t) > 3 and t in DICT)
-    if dict_hits >= 1:
-        print("[DEBUG]: Passed dict")
-        return True
+
     '''
     # chi-square test (English ≈ low chi²)
     chi = chi_square_english_score(s)
-    print(f"[DEBUG] {chi}")
+    #print(f"[DEBUG] {chi}")
     if chi < 100:  # good threshold
         #print("[DEBUG]: Passed Xsquare")
         return True
+    # Let's optimize this to get frequencies per token not per "sentence"
     '''
-    chi_hits = sum(1 for t in tokens if chi_square_english_score(t) < 100)
-    print(chi_hits)
-    if chi_hits >= 2:
-      print("[DEBUG]: Chi passed")
-      return True
-        
+
+    chitokens = re.findall(r"[A-Za-z_\.]+", s.lower())
+    chi_hits = sum(1 for t in chitokens if chi_square_english_score(t) < 100)
+
+    # Format Strings Matches
+    fmt_tokens = printf_format_match(s)
+
     # bigram score
-    if english_bigram_score(s) > 0.03:
-        #print("[DEBUG]: Passed bigram")
+    bigram_score = english_bigram_score(s)
+
+    '''
+	DEBUG CODE FOR FINE TUNING
+    '''
+
+    if debug_enabled:
+       print("-------")
+       print("[DEBUG] len < 4 rejected", len(s))
+       print("[DEBUG] allowed chars ratio < 0.85 rejected", allowed / len(s))
+       print("[DEBUG] dict token", tokens)
+       print("[DEBUG] dict hits >= 1 passes", dict_hits)
+       print("[DEBUG] chitokens", chitokens)
+       print("[DEBUG] chi hits >= 1 pases", chi_hits)
+       print("[DEBUG] fmt tokens >= 1 pases", fmt_tokens)
+       print("[DEBUG] bigram score > 0.03 pases", chi_hits)
+       print("[DEBUG] is IP Address?", is_ip(s))
+       print("[DEBUG] is SNMP OID?", is_oid(s))
+
+    # length check
+    if len(s) < 4:
+        if debug_enabled:
+           print("[DEBUG] rejected", s)
+        return False
+
+
+    if dict_hits >= 1:
         return True
 
-    return False
+    if chi_hits >= 1:
+      return True
 
-# -------------------------------------------------------
+    if len(fmt_tokens) >= 1:
+      return True
+
+    if bigram_score > 0.03:
+        return True
+
+    if is_ip(s):
+        return True
+
+    if is_oid(s):
+        return True
+
+    if allowed / len(s) < 0.85:
+        if debug_enabled:
+           print("[DEBUG] rejected", s)
+        return False
+
+    if debug_enabled:
+       print("[DEBUG] rejected", s)
+
+    return False
 
 def set_all_strings():
     strings = idautils.Strings()
@@ -115,4 +282,5 @@ def set_all_strings():
             print(f"Skipping: 0x{ea:X}: {text} {len_s}")
 
 set_all_strings()
+
 
