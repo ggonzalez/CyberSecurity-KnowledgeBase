@@ -104,7 +104,7 @@ sudo python explore_usb_device.py --send-command 2 "AA BB CC DD"
 sudo python explore_usb_device.py --send-command 2 "AABBCCDD"
 
 # Use VID/PID instead of device index
-sudo python explore_usb_device.py --send-command 0 "01 02 03" --vid 0x1234 --pid 0x5678
+sudo python explore_usb_device.py --send-command "01 02 03" --vid 0x1234 --pid 0x5678
 
 # Enable logging to capture command and response
 sudo python explore_usb_device.py --send-command 2 "AA BB CC" --log command_test
