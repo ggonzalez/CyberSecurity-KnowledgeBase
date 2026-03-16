@@ -1,8 +1,13 @@
 # Set only those strings that look like English-readable text in Ghidra.
 #
-# Gabriel Gonzalez Garcia - www.gabrielcybersecurity.com
-# Use with Ghidra (Jython)
-#
+#@author Gabriel Gonzalez Garcia (www.gabrielcybersecurity.com)
+#@category Strings
+#@keybinding
+#@menupath
+#@toolbar
+#@version 1.0
+#@description Scan for string candidates and create string data types for those that look like English-readable text. Uses chi-square, bigram, dictionary, and format-string heuristics.
+#@runtime Jython
 
 from __future__ import print_function
 from ghidra.program.util.string import StringSearcher, FoundStringCallback
@@ -11,6 +16,7 @@ from ghidra.util.task import TaskMonitor
 from collections import Counter
 import re
 import sys
+import os
 
 debug_enabled = False
 
@@ -26,11 +32,14 @@ EN_FREQ = {
 }
 
 # --- Simple English word list (extendable) ---
-# For Ghidra script, we might not have external file access easily depending on context,
-# but we'll try to keep the logic similar or fallback.
-DICT = {"error", "file", "user", "login", "network", "version", "failed", "success", "config", "system"}
-# Attempt to load words_alpha.txt if it exists in current dir (wherever that is) or script dir?
-# In Ghidra, hard to rely on PWD. We'll stick to the fallback or user can extend.
+try:
+    _script_dir = os.path.dirname(getSourceFile().getAbsolutePath())
+    _words_path = os.path.join(_script_dir, "..", "words_alpha.txt")
+    with open(_words_path) as _f:
+        DICT = set(x.strip().lower() for x in _f)
+except Exception:
+    # fallback tiny dictionary
+    DICT = {"error", "file", "user", "login", "network", "version", "failed", "success", "config", "system"}
 
 def chi_square_english_score(s):
     s = ''.join([c for c in s.lower() if c.isalpha()])
@@ -43,10 +52,7 @@ def chi_square_english_score(s):
     for letter, expected_freq in EN_FREQ.items():
         observed = counts.get(letter, 0)
         expected = expected_freq * total
-        if expected > 0:
-            chi += (observed - expected)**2 / (expected)
-        else:
-             chi += (observed - expected)**2 / (1e-9)
+        chi += (observed - expected)**2 / (expected + 1e-9)
     return chi
 
 # -------------------------------------------------------
@@ -154,11 +160,16 @@ def looks_english(s):
 
     if debug_enabled:
        print("-------")
-       print("[DEBUG] analyzing:", s)
-       print("[DEBUG] dict hits:", dict_hits)
-       print("[DEBUG] chi hits:", chi_hits)
-       print("[DEBUG] fmt tokens:", fmt_tokens)
-       print("[DEBUG] bigram score:", bigram_score)
+       print("[DEBUG] len < 4 rejected", len(s))
+       print("[DEBUG] allowed chars ratio < 0.85 rejected", float(allowed) / len(s) if len(s) > 0 else 0)
+       print("[DEBUG] dict token", tokens)
+       print("[DEBUG] dict hits >= 1 passes", dict_hits)
+       print("[DEBUG] chitokens", chitokens)
+       print("[DEBUG] chi hits >= 1 passes", chi_hits)
+       print("[DEBUG] fmt tokens >= 1 passes", fmt_tokens)
+       print("[DEBUG] bigram score > 0.03 passes", bigram_score)
+       print("[DEBUG] is IP Address?", is_ip(s))
+       print("[DEBUG] is SNMP OID?", is_oid(s))
 
     # length check
     if len(s) < 4:
@@ -183,7 +194,12 @@ def looks_english(s):
         return True
 
     if len(s) > 0 and (float(allowed) / len(s)) < 0.85:
+        if debug_enabled:
+           print("[DEBUG] rejected", s)
         return False
+
+    if debug_enabled:
+       print("[DEBUG] rejected", s)
 
     return False
 
@@ -219,26 +235,25 @@ def set_all_strings():
             clean_text = text.strip()
             
             if looks_english(clean_text):
-                # Check if data already exists to avoid errors or double work
+                # Skip addresses that already have a string defined
                 existing_data = getDataAt(addr)
                 if existing_data is not None:
-                     if existing_data.isDefined() and existing_data.getDataType().getName().lower().find("string") != -1:
-                         # Already a string
-                         continue
-                
-                # Clear strictly the range we need? 
-                # Be careful not to destroy code if heuristics are wrong.
-                # However, original script forces creation.
-                
+                    if existing_data.isDefined() and existing_data.getDataType().getName().lower().find("string") != -1:
+                        continue
+
+                # Skip addresses that are part of disassembled instructions
+                if getInstructionAt(addr) is not None:
+                    if debug_enabled:
+                        print("Skipping instruction at {}: {}".format(addr, clean_text[:20]))
+                    continue
+
                 # Create the string
-                # createAsciiString(addr) or createData(addr, TerminatedStringDataType())
-                # createAsciiString auto-calculates length
                 try:
                     createAsciiString(addr)
                     count_created += 1
                     print("Created string at {}: {}...".format(addr, clean_text[:20]))
-                except Exception as e:
-                    # Might collide with instruction or other data
+                except:
+                    # Catch both Python and Java exceptions (e.g. CodeUnitInsertionException)
                     pass
             else:
                 if debug_enabled:
@@ -249,8 +264,7 @@ def set_all_strings():
 
     print("Finished. Created {} new strings.".format(count_created))
 
-if __name__ == "__main__":
-    if currentProgram:
-        set_all_strings()
-    else:
-        print("No program loaded.")
+if currentProgram is not None:
+    set_all_strings()
+else:
+    print("No program loaded.")
