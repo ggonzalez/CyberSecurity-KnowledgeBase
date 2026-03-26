@@ -1,1 +1,29 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
 .DS_Store
+
+# IDE
+.vscode/
+.idea/
+
