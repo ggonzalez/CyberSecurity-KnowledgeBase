@@ -1,0 +1,13 @@
+RewriteEngine On
+
+# Disable direct /ping URL. Ping is only available under /api/ping.
+RewriteRule ^ping(?:/.*)?$ - [R=404,L]
+
+# Flat deployment: route /api and /api/... to api.php in the same QRNG root.
+RewriteRule ^api/?$ api.php [QSA,L]
+RewriteRule ^api/(.*)$ api.php [QSA,L]
+
+# Route remaining non-file requests through index.php for the dashboard.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]

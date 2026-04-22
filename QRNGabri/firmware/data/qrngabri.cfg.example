@@ -1,0 +1,10 @@
+{
+  "wifi_ssid": "",
+  "wifi_password": "",
+  "backend_url": "https://YOUR_HOST/api",
+  "backend_psk": "REPLACE_WITH_32_CHAR_RANDOM_TOKEN",
+  "random_token": "REPLACE_WITH_32_CHAR_RANDOM_TOKEN",
+  "poll_interval_ms": 10000,
+  "modular_sum": false,
+  "modular_sum_bits": 2
+}
