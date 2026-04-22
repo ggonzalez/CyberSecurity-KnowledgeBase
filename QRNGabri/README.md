@@ -2,7 +2,16 @@
 
 **DIY Quantum Random Number Generator** using a RadonEye (RD200V2) radiation detector as the entropy source.
 
-Documentation and open source repository: [https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/QRNGabri](https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/QRNGabri)
+Documentation and open source repository: [https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/tree/main/QRNGabri](https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/tree/main/QRNGabri)
+
+## Project PDF
+
+<object data="./qrng.pdf" type="application/pdf" width="100%" height="720">
+  <p>
+    Your Markdown viewer does not support embedded PDFs.
+    Open <a href="./qrng.pdf">qrng.pdf</a> directly.
+  </p>
+</object>
 
 ---
 

@@ -37,7 +37,7 @@ date_default_timezone_set('UTC');
     </div>
     <div class="header-meta" style="align-self:flex-end">
       <div>METHOD &nbsp; <span>Slow-Clock LSB Extraction</span></div>
-      <div>DOCS &nbsp; <span><a href="https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/QRNGabri" target="_blank" rel="noopener noreferrer" style="color:var(--neon2);text-decoration:none">GitHub Repository</a></span></div>
+      <div>DOCS &nbsp; <span><a href="https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/tree/main/QRNGabri" target="_blank" rel="noopener noreferrer" style="color:var(--neon2);text-decoration:none">GitHub Repository</a></span></div>
     </div>
   </header>
 
@@ -179,7 +179,7 @@ date_default_timezone_set('UTC');
 <footer class="footer">
   &#9762; QRNGabri &mdash; True Quantum Randomness from Radon-222 Alpha Decay &mdash; MIT License
   <br>
-  <a href="https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/QRNGabri" target="_blank" rel="noopener noreferrer" style="color:var(--neon2);text-decoration:none">
+  <a href="https://github.com/ggonzalez/CyberSecurity-KnowledgeBase/tree/main/QRNGabri" target="_blank" rel="noopener noreferrer" style="color:var(--neon2);text-decoration:none">
     Documentation and Open Source Repository
   </a>
 </footer>
