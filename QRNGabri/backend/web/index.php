@@ -80,7 +80,9 @@ date_default_timezone_set('UTC');
         </div>
         <div class="health-label ok" id="healthLabel">LOADING…</div>
         <dl class="health-stats">
-          <div><dt>BIAS SCORE</dt><dd id="statBias">—</dd></div>
+          <div><dt>QUALITY BIAS</dt><dd id="statBiasQuality">—</dd></div>
+          <div><dt>RAW BIAS</dt><dd id="statBiasRaw">—</dd></div>
+          <div><dt>CORR. BIAS</dt><dd id="statBiasCorrected">—</dd></div>
           <div><dt>TOTAL BITS</dt><dd id="statTotal">—</dd></div>
           <div><dt>ONES</dt><dd id="statOnes">—</dd></div>
           <div><dt>ZEROS</dt><dd id="statZeros">—</dd></div>
@@ -89,7 +91,7 @@ date_default_timezone_set('UTC');
     </div>
 
     <!-- Range stats -->
-    <div class="panel">
+    <div class="panel" style="overflow:visible">
       <div class="panel-title">&#9642; Selected Range</div>
       <div class="chart-controls">
         <div>
@@ -102,14 +104,36 @@ date_default_timezone_set('UTC');
         </div>
         <button id="applyRange" class="btn btn-primary" style="align-self:flex-end">APPLY</button>
       </div>
+      <div class="chart-controls" style="margin-top:0.8rem">
+        <div>
+          <label>READING TYPE</label><br>
+          <select id="readingBits" class="input-dark" style="margin-top:0.3rem">
+            <option value="1" selected>1-bit (current entropy stream)</option>
+            <option value="2">2-bit readings</option>
+            <option value="3">3-bit readings</option>
+            <option value="4">4-bit readings</option>
+            <option value="5">5-bit readings</option>
+            <option value="6">6-bit readings</option>
+            <option value="7">7-bit readings</option>
+            <option value="8">8-bit readings</option>
+          </select>
+        </div>
+        <div>
+          <label>QUALITY CHECK</label><br>
+          <select id="qualityBiasType" class="input-dark" style="margin-top:0.3rem">
+            <option value="raw" selected>Raw Bias</option>
+            <option value="corrected">Corrected Bias (modular sum)</option>
+          </select>
+        </div>
+      </div>
       <div style="display:flex;gap:2rem;margin-top:0.5rem">
         <div class="stat-block">
           <div class="stat-value" id="chartSamples">—</div>
-          <div class="stat-label">Packets</div>
+          <div class="stat-label">Packets (range / total)</div>
         </div>
         <div class="stat-block">
           <div class="stat-value" id="chartBias" style="font-size:1.2rem">—</div>
-          <div class="stat-label">Bias |p(1)−50%|</div>
+          <div class="stat-label">Raw / Corrected Bias</div>
         </div>
       </div>
     </div>

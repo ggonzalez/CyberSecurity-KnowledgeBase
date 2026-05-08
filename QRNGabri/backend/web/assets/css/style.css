@@ -28,7 +28,7 @@
 /* ── Reset ──────────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; color-scheme: dark; }
 
 body {
   background: var(--bg);
@@ -416,6 +416,7 @@ body::after {
   font-size: 0.75rem;
   outline: none;
   transition: border-color 0.2s;
+  color-scheme: dark;
 }
 
 .input-dark:focus { border-color: var(--neon2); }

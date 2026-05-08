@@ -19,6 +19,19 @@ CREATE TABLE IF NOT EXISTS entropy_samples (
     INDEX idx_created_at  (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- ── entropy_counter_samples ────────────────────────────────────────────────
+-- Stores per-upload 8-bit counter snapshots from the device for extra analysis.
+CREATE TABLE IF NOT EXISTS entropy_counter_samples (
+    id                      BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    device_id               VARCHAR(64)      NOT NULL,
+    counter_value           TINYINT UNSIGNED NOT NULL,   -- low 8 bits of C counter
+    source_entropy_sample_id BIGINT UNSIGNED NULL,       -- linked entropy_samples.id when available
+    created_at              DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_counter_device_time (device_id, created_at),
+    INDEX idx_counter_created_at  (created_at),
+    INDEX idx_counter_source      (source_entropy_sample_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- ── generated_numbers ────────────────────────────────────────────────────────
 -- Each row is a 32-bit random number assembled from PACKETS_PER_RANDOM packets.
 CREATE TABLE IF NOT EXISTS generated_numbers (

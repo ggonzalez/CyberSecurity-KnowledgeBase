@@ -51,6 +51,18 @@ function handlePush(): void {
         jsonError(400, 'value out of range [0, 65535]');
     }
 
+    $counter8 = null;
+    if (array_key_exists('c_counter_8bit', $data) && $data['c_counter_8bit'] !== null) {
+        $counterRaw = $data['c_counter_8bit'];
+        if (!is_int($counterRaw) && !ctype_digit((string)$counterRaw)) {
+            jsonError(400, 'c_counter_8bit must be an unsigned integer');
+        }
+        $counter8 = (int)$counterRaw;
+        if ($counter8 < 0 || $counter8 > 255) {
+            jsonError(400, 'c_counter_8bit out of range [0, 255]');
+        }
+    }
+
     $modularSum     = isset($data['modular_sum'])      ? (bool)$data['modular_sum']      : false;
     $modularSumBits = isset($data['modular_sum_bits']) ? (int)$data['modular_sum_bits']  : 2;
 
@@ -62,6 +74,13 @@ function handlePush(): void {
     );
     $stmt->execute([$deviceId, $value]);
     $sampleId = (int)$db->lastInsertId();
+
+    if ($counter8 !== null) {
+        $stmt = $db->prepare(
+            'INSERT INTO entropy_counter_samples (device_id, counter_value, source_entropy_sample_id) VALUES (?, ?, ?)'
+        );
+        $stmt->execute([$deviceId, $counter8, $sampleId]);
+    }
 
     // Upsert device status
     upsertDeviceStatus($db, $deviceId, $modularSum, $modularSumBits);
@@ -206,6 +225,7 @@ function handleEntropy(): void {
     $deviceId = $_GET['device_id'] ?? null;
     $from     = $_GET['from'] ?? null;
     $to       = $_GET['to']   ?? null;
+    $readingBits = min(8, max(1, (int)($_GET['reading_bits'] ?? 1)));
 
     if ($deviceId !== null && !preg_match('/^[0-9A-Fa-f:]{11,17}$/', $deviceId)) {
         jsonError(400, 'Invalid device_id');
@@ -217,64 +237,117 @@ function handleEntropy(): void {
         jsonError(400, 'Invalid to date format (YYYY-MM-DD)');
     }
 
-    $db     = getDB();
+    $db = getDB();
+
+    $sourceTable = $readingBits === 1 ? 'entropy_samples' : 'entropy_counter_samples';
+    $valueColumn = $readingBits === 1 ? 'sample_value' : 'counter_value';
+
+    // ── Range-filtered display samples (scatter chart / sample list) ─────────
     $where  = [];
     $params = [];
-
     if ($deviceId) { $where[] = 'device_id = ?'; $params[] = $deviceId; }
     if ($from)     { $where[] = 'created_at >= ?'; $params[] = $from . ' 00:00:00'; }
     if ($to)       { $where[] = 'created_at <= ?'; $params[] = $to   . ' 23:59:59'; }
 
-    $sql = 'SELECT id, device_id, sample_value, created_at FROM entropy_samples';
+    $sql = "SELECT id, device_id, {$valueColumn} AS sample_value, created_at FROM {$sourceTable}";
     if ($where) $sql .= ' WHERE ' . implode(' AND ', $where);
     $sql .= ' ORDER BY created_at DESC LIMIT ?';
     $params[] = $limit;
 
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $rows = $stmt->fetchAll();
+    $displayRows = $stmt->fetchAll();
 
-    // Compute aggregate stats and accumulated raw bias over measurement count.
-    $ones  = 0;
-    $zeros = 0;
-    foreach ($rows as $row) {
-        $v = (int)$row['sample_value'];
-        for ($b = 0; $b < 16; $b++) {
-            if ($v & (1 << $b)) $ones++; else $zeros++;
+    // Mask display values to selected bit width for scatter chart
+    if ($readingBits > 1) {
+        $mask = (1 << $readingBits) - 1;
+        foreach ($displayRows as &$row) {
+            $row['sample_value'] = (int)$row['sample_value'] & $mask;
         }
+        unset($row);
     }
 
-    $runningOnes = 0;
-    $runningTotal = 0;
-    $biasSeries = [];
-    foreach (array_reverse($rows) as $index => $row) {
+    // ── Full-history samples for bias computation (no date filter) ───────────
+    $biasWhere  = [];
+    $biasParams = [];
+    if ($deviceId) { $biasWhere[] = 'device_id = ?'; $biasParams[] = $deviceId; }
+
+    $biasSql = "SELECT {$valueColumn} AS sample_value, created_at FROM {$sourceTable}";
+    if ($biasWhere) $biasSql .= ' WHERE ' . implode(' AND ', $biasWhere);
+    $biasSql .= ' ORDER BY created_at ASC LIMIT 5000';
+
+    $stmt = $db->prepare($biasSql);
+    $stmt->execute($biasParams);
+    $allRows = $stmt->fetchAll();
+
+    $modularSumBits = getDeviceModularSumBits($db, $deviceId);
+
+    // Compute bias series over the full history
+    $totalRawOnes = 0;
+    $totalRawBits = 0;
+    $rawSeries = [];
+    $correctedSeries = [];
+    $corrAccum = [];
+    $corrOnes = 0;
+    $corrBits = 0;
+
+    foreach ($allRows as $index => $row) {
         $v = (int)$row['sample_value'];
-        for ($b = 0; $b < 16; $b++) {
-            if ($v & (1 << $b)) {
-                $runningOnes++;
+        $sampleBitWidth = $readingBits === 1 ? 16 : $readingBits;
+
+        for ($b = 0; $b < $sampleBitWidth; $b++) {
+            $bit = ($v >> $b) & 0x01;
+            $totalRawOnes += $bit;
+            $totalRawBits++;
+
+            $corrAccum[] = $bit;
+            if (count($corrAccum) >= $modularSumBits) {
+                $x = 0;
+                foreach ($corrAccum as $rb) { $x ^= $rb; }
+                $corrOnes += $x;
+                $corrBits++;
+                $corrAccum = [];
             }
-            $runningTotal++;
         }
 
-        $biasSeries[] = [
+        $rawBias  = $totalRawBits > 0 ? abs($totalRawOnes / $totalRawBits - 0.5) : 0.0;
+        $corrBias = $corrBits > 0 ? abs($corrOnes / $corrBits - 0.5) : 0.0;
+
+        $rawSeries[] = [
             'measurement' => $index + 1,
-            'bias' => round(abs($runningOnes / $runningTotal - 0.5), 6),
-            'created_at' => $row['created_at'],
+            'bias'        => round($rawBias, 6),
+            'value'       => $v,
+            'created_at'  => $row['created_at'],
+        ];
+        $correctedSeries[] = [
+            'measurement' => $index + 1,
+            'bias'        => round($corrBias, 6),
+            'value'       => $v,
+            'created_at'  => $row['created_at'],
         ];
     }
 
-    $total = $ones + $zeros;
-    $bias  = $total > 0 ? abs($ones / $total - 0.5) : 0.0;
+    $rawZeros = max(0, $totalRawBits - $totalRawOnes);
+    $rawBias  = $totalRawBits > 0 ? abs($totalRawOnes / $totalRawBits - 0.5) : 0.0;
+    $corrBias = $corrBits > 0 ? abs($corrOnes / $corrBits - 0.5) : 0.0;
 
     jsonOk([
-        'samples' => $rows,
-        'bias_series' => $biasSeries,
-        'stats'   => [
-            'ones'  => $ones,
-            'zeros' => $zeros,
-            'total' => $total,
-            'measurements' => count($rows),
-            'bias'  => round($bias, 6),
+        'samples'              => $displayRows,
+        'bias_series'          => $rawSeries,
+        'bias_series_raw'      => $rawSeries,
+        'bias_series_corrected'=> $correctedSeries,
+        'stats' => [
+            'reading_bits'         => $readingBits,
+            'ones'                 => $totalRawOnes,
+            'zeros'                => $rawZeros,
+            'total'                => $totalRawBits,
+            'measurements'         => count($allRows),
+            'range_measurements'   => count($displayRows),
+            'bias'                 => round($rawBias, 6),
+            'raw_bias'             => round($rawBias, 6),
+            'corrected_bias'       => round($corrBias, 6),
+            'modular_sum_bits'     => $modularSumBits,
+            'corrected_total_bits' => $corrBits,
         ],
     ]);
 }
@@ -321,6 +394,30 @@ function upsertDeviceStatus(PDO $db, string $deviceId,
             modular_sum_bits    = VALUES(modular_sum_bits)'
     );
     $stmt->execute([$deviceId, 16, round($bias, 6), (int)$modSum, $modSumBits]);
+}
+
+function getDeviceModularSumBits(PDO $db, ?string $deviceId): int {
+    $fallback = 2;
+    $bits = $fallback;
+
+    if ($deviceId !== null && $deviceId !== '') {
+        $stmt = $db->prepare('SELECT modular_sum_bits FROM device_status WHERE device_id = ? LIMIT 1');
+        $stmt->execute([$deviceId]);
+        $row = $stmt->fetch();
+        if ($row && isset($row['modular_sum_bits'])) {
+            $bits = (int)$row['modular_sum_bits'];
+        }
+    } else {
+        $row = $db->query('SELECT modular_sum_bits FROM device_status ORDER BY last_seen DESC LIMIT 1')->fetch();
+        if ($row && isset($row['modular_sum_bits'])) {
+            $bits = (int)$row['modular_sum_bits'];
+        }
+    }
+
+    if ($bits < 2 || $bits > 8) {
+        return $fallback;
+    }
+    return $bits;
 }
 
 /**

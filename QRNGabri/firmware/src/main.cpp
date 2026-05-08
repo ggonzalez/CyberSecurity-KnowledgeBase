@@ -16,6 +16,7 @@ static bool              g_staMode        = false;
 static QRNGWebServer*    g_webServer      = nullptr;
 static RadonEyeBLEClient g_bleClient;
 static std::string       g_bleAddress     = "";
+static volatile uint8_t  g_latestCounter8 = 0;
 static constexpr uint32_t ENTROPY_POLL_INTERVAL_MS = 120000;
 static constexpr uint32_t ENTROPY_MIN_ACCEPT_DELTA_SECONDS = 600;
 
@@ -52,7 +53,7 @@ static void startAP() {
  * POST a 16-bit entropy packet to the backend.
  * Returns true on HTTP 200/201.
  */
-static bool uploadPacket(uint16_t value) {
+static bool uploadPacket(uint16_t value, uint8_t counter8) {
     if (g_config.backend_url.isEmpty() || g_config.backend_psk.isEmpty()) {
         Serial.println("[Upload] Skipped: backend_url/backend_psk missing in config");
         return false;
@@ -73,14 +74,15 @@ static bool uploadPacket(uint16_t value) {
     http.addHeader("Authorization", "Bearer " + g_config.backend_psk);
     http.setTimeout(8000);
 
-    StaticJsonDocument<128> doc;
+    StaticJsonDocument<160> doc;
     doc["value"]     = value;
+    doc["c_counter_8bit"] = counter8;
     doc["device_id"] = WiFi.macAddress();
     String body;
     serializeJson(doc, body);
 
-    Serial.printf("[Upload] POST %s | value=0x%04X device_id=%s\n",
-                  url.c_str(), value, WiFi.macAddress().c_str());
+    Serial.printf("[Upload] POST %s | value=0x%04X c8=0x%02X device_id=%s\n",
+                  url.c_str(), value, counter8, WiFi.macAddress().c_str());
 
     int code = http.POST(body);
     String resp = http.getString();
@@ -170,6 +172,7 @@ static void entropyTask(void* /*pvParam*/) {
                               static_cast<unsigned long>(uptime.uptime_seconds));
 
                 if (!entropyPrimed) {
+                    g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
                     g_entropy.feedCNow(reading.c_last); // Prime baseline; first call emits no bit.
                     entropyPrimed = true;
                     Serial.println("[Entropy] Baseline primed with current C_last");
@@ -178,12 +181,14 @@ static void entropyTask(void* /*pvParam*/) {
                 if (!hasAcceptedUptime) {
                     lastAcceptedUptimeSeconds = uptime.uptime_seconds;
                     lastAcceptedCLast = reading.c_last;
+                    g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
                     hasAcceptedUptime = true;
                     Serial.println("[Entropy] First accepted sample reference captured; waiting for new C_last or 10-minute timeout");
                 } else if (uptime.uptime_seconds < lastAcceptedUptimeSeconds) {
                     // Device likely rebooted or uptime counter reset; re-baseline uptime gate.
                     lastAcceptedUptimeSeconds = uptime.uptime_seconds;
                     lastAcceptedCLast = reading.c_last;
+                    g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
                     Serial.println("[Entropy] Uptime decreased/reset; re-baselining uptime gate");
                 } else {
                     uint32_t elapsed = uptime.uptime_seconds - lastAcceptedUptimeSeconds;
@@ -193,6 +198,7 @@ static void entropyTask(void* /*pvParam*/) {
                         int16_t previousCLast = lastAcceptedCLast;
                         lastAcceptedUptimeSeconds = uptime.uptime_seconds;
                         lastAcceptedCLast = reading.c_last;
+                        g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
                         g_entropy.feedCNow(reading.c_last);
 
                         if (cLastChanged && elapsed < ENTROPY_MIN_ACCEPT_DELTA_SECONDS) {
@@ -247,7 +253,7 @@ static void uploadTask(void* /*pvParam*/) {
         if (g_entropy.pendingPackets() > 0) {
             EntropyPacket pkt{};
             if (g_entropy.popPacket(pkt)) {
-                bool ok = uploadPacket(pkt.value);
+                bool ok = uploadPacket(pkt.value, g_latestCounter8);
                 if (ok) {
                     Serial.printf("[Upload] Sent packet 0x%04X\n", pkt.value);
                 } else {

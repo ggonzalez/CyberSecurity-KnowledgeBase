@@ -4,6 +4,7 @@ venv/
 env/
 ENV/
 .env/
+pyvenv.cfg
 
 # Python cache
 __pycache__/
@@ -27,3 +28,25 @@ build/
 .vscode/
 .idea/
 
+# QRNGabri project plan
+QRNGabri-plan.md
+
+# QRNGabri runtime config files (contain credentials)
+QRNGabri/firmware/data/qrngabri.cfg
+QRNGabri/backend/config/config.php
+
+# QRNGabri PlatformIO build artifacts and vendored dependencies
+QRNGabri/firmware/.pio/
+
+# QRNGabri deployment helper
+QRNGabri/backend/deploy-backend.sh
+QRNGabri/deploy-remote-firmware.sh
+
+GaBL-E/document.pdf
+GaBL-E/document.pptx
+GaBL-E/document.txt
+GaBL-E/test_strategies.py
+GaBL-E/to_terminal_pdf.sh
+GaBL-E/to_terminal_pptx.py
+
+Automotive/

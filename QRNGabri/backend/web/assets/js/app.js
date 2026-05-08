@@ -64,6 +64,17 @@ function computeBiasAxisMax(points) {
     return Math.min(0.50, Math.max(0.03, rounded));
 }
 
+function getSelectedReadingBits() {
+    const v = Number($('readingBits') ? $('readingBits').value : 1);
+    if (!Number.isFinite(v)) return 1;
+    return Math.min(8, Math.max(1, v));
+}
+
+function getSelectedQualityType() {
+    const v = $('qualityBiasType') ? $('qualityBiasType').value : 'raw';
+    return v === 'corrected' ? 'corrected' : 'raw';
+}
+
 // ── Date range helpers ─────────────────────────────────────────────────────────
 function getDefaultRange() {
     const to   = new Date();
@@ -91,7 +102,7 @@ function initCharts() {
         type: 'line',
         data: {
             datasets: [{
-                label: 'Accumulated Raw Bias',
+                label: 'Raw Bias',
                 data: [],
                 borderColor: '#00ffcc',
                 backgroundColor: 'rgba(0,255,204,0.15)',
@@ -107,19 +118,50 @@ function initCharts() {
                 },
                 pointBackgroundColor: ctx => getBiasColor(resolveBiasValue(ctx && ctx.raw ? ctx.raw.y : undefined)),
                 pointBorderColor: ctx => getBiasColor(resolveBiasValue(ctx && ctx.raw ? ctx.raw.y : undefined)),
+            }, {
+                label: 'Corrected Bias',
+                data: [],
+                borderColor: '#8b5cf6',
+                backgroundColor: 'rgba(139,92,246,0.10)',
+                borderWidth: 2,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHitRadius: 10,
+                tension: 0.18,
+                fill: false,
             }],
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: { display: false },
+                legend: {
+                    display: true,
+                    labels: { color: '#4a6080' },
+                },
                 tooltip: {
+                    mode: 'index',
+                    intersect: false,
                     backgroundColor: '#0d1628',
                     borderColor: '#1a2e52',
                     borderWidth: 1,
                     callbacks: {
-                        label: ctx => ` bias ${(ctx.parsed.y * 100).toFixed(2)}% at measurement ${ctx.parsed.x}`,
+                        title: ctxArr => {
+                            if (!ctxArr.length) return '';
+                            const pt = ctxArr[0].raw;
+                            const n = ctxArr[0].parsed.x;
+                            const v = pt && pt.value !== undefined ? pt.value : null;
+                            const rb = getSelectedReadingBits();
+                            const valStr = v === null ? '' : rb === 1
+                                ? `  ·  0x${v.toString(16).toUpperCase().padStart(4, '0')}`
+                                : `  ·  value: ${v}`;
+                            return `Measurement #${n}${valStr}`;
+                        },
+                        label: ctx => {
+                            const pct = (ctx.parsed.y * 100).toFixed(3);
+                            const dsLabel = ctx.dataset.label || '';
+                            return ` ${dsLabel}: ${pct}%`;
+                        },
                     },
                 },
             },
@@ -251,23 +293,47 @@ async function fetchRandom() {
 
 async function fetchEntropy() {
     const { from, to } = getRange();
+    const readingBits = getSelectedReadingBits();
+    const qualityType = getSelectedQualityType();
     try {
-        const res = await fetch(`${API_BASE}/entropy?from=${from}&to=${to}&limit=2000`);
+        const res = await fetch(`${API_BASE}/entropy?from=${from}&to=${to}&limit=2000&reading_bits=${readingBits}`);
         if (!res.ok) return;
         const data = await res.json();
 
         const stats   = data.stats   || {};
         const samples = data.samples || [];
-        const biasSeries = data.bias_series || [];
-        const bias    = stats.bias ?? 0;
+        const biasSeriesRaw = data.bias_series_raw || data.bias_series || [];
+        const biasSeriesCorrected = data.bias_series_corrected || [];
+        const rawBias = resolveBiasValue(stats.raw_bias, resolveBiasValue(stats.bias, 0));
+        const correctedBias = resolveBiasValue(stats.corrected_bias, 0);
+        const qualityBias = qualityType === 'corrected' ? correctedBias : rawBias;
 
-        biasChart.data.datasets[0].data = biasSeries.map(point => ({
+        // Filter bias series to the selected date range for display
+        // (bias values are still cumulative from full history – only the visible window changes)
+        const filterBySeries = (series) => series.filter(pt => {
+            if (!pt.created_at) return true;
+            const d = pt.created_at.slice(0, 10); // YYYY-MM-DD
+            if (from && d < from) return false;
+            if (to   && d > to)   return false;
+            return true;
+        });
+        const visibleRaw       = filterBySeries(biasSeriesRaw);
+        const visibleCorrected = filterBySeries(biasSeriesCorrected);
+
+        biasChart.data.datasets[0].data = visibleRaw.map(point => ({
             x: point.measurement,
             y: point.bias,
+            value: point.value,
         }));
-        biasChart.options.scales.y.max = computeBiasAxisMax(biasSeries);
-        biasChart.data.datasets[0].borderColor = getBiasColor(bias);
-        biasChart.data.datasets[0].backgroundColor = getBiasFillColor(bias);
+        biasChart.data.datasets[1].data = visibleCorrected.map(point => ({
+            x: point.measurement,
+            y: point.bias,
+            value: point.value,
+        }));
+        const mergedBias = visibleRaw.concat(visibleCorrected);
+        biasChart.options.scales.y.max = computeBiasAxisMax(mergedBias);
+        biasChart.data.datasets[0].borderColor = getBiasColor(rawBias);
+        biasChart.data.datasets[0].backgroundColor = getBiasFillColor(rawBias);
         biasChart.update();
 
         // Update scatter chart
@@ -276,18 +342,34 @@ async function fetchEntropy() {
             y: s.sample_value,
         }));
         scatterChart.data.datasets[0].data = scatterData;
+        scatterChart.options.scales.y.max = readingBits === 1 ? 65535 : ((1 << readingBits) - 1);
+        scatterChart.options.scales.y.min = 0;
+        scatterChart.options.scales.y.ticks.callback = v => {
+            if (readingBits === 1) {
+                return '0x' + v.toString(16).toUpperCase().padStart(4, '0');
+            }
+            return v.toString(10);
+        };
         scatterChart.update('none');
 
-        // Update bias stat
-        $('chartBias').textContent   = (bias * 100).toFixed(2) + '%';
-        $('chartSamples').textContent = (stats.measurements || samples.length).toLocaleString();
-        $('statBias').textContent   = bias.toFixed(4);
+        // Update bias/stat cards
+        $('chartBias').textContent   = `${(rawBias * 100).toFixed(2)}% / ${(correctedBias * 100).toFixed(2)}%`;
+        const totalMeasurements = stats.measurements ?? samples.length;
+        const rangeMeasurements = stats.range_measurements ?? totalMeasurements;
+        $('chartSamples').textContent = rangeMeasurements !== totalMeasurements
+            ? `${rangeMeasurements.toLocaleString()} / ${totalMeasurements.toLocaleString()}`
+            : totalMeasurements.toLocaleString();
+        $('statBiasQuality').textContent   = qualityBias.toFixed(4);
+        $('statBiasRaw').textContent   = rawBias.toFixed(4);
+        $('statBiasCorrected').textContent   = correctedBias.toFixed(4);
         $('statTotal').textContent  = (stats.total || 0).toLocaleString();
         $('statOnes').textContent   = (stats.ones || 0).toLocaleString();
         $('statZeros').textContent  = (stats.zeros || 0).toLocaleString();
-        $('chartBias').style.color = getBiasColor(bias);
-        $('statBias').style.color = getBiasColor(bias);
-        setLED(bias, false);
+        $('chartBias').style.color = getBiasColor(qualityBias);
+        $('statBiasQuality').style.color = getBiasColor(qualityBias);
+        $('statBiasRaw').style.color = getBiasColor(rawBias);
+        $('statBiasCorrected').style.color = getBiasColor(correctedBias);
+        setLED(qualityBias, false);
 
     } catch (e) {
         console.warn('Entropy fetch failed', e);
@@ -339,6 +421,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const applyBtn = $('applyRange');
     if (applyBtn) {
         applyBtn.addEventListener('click', () => {
+            fetchEntropy();
+        });
+    }
+
+    if ($('readingBits')) {
+        $('readingBits').addEventListener('change', () => {
+            fetchEntropy();
+        });
+    }
+
+    if ($('qualityBiasType')) {
+        $('qualityBiasType').addEventListener('change', () => {
             fetchEntropy();
         });
     }

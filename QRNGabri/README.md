@@ -59,11 +59,13 @@ Radioactive decay is a fundamentally quantum process. The exact moment an atom d
 ### `backend/` — PHP REST API + Dashboard
 
 - **REST API** — PSK Bearer token auth, endpoints for entropy push, startup ping/auth connectivity checks, status, and random number retrieval.
+- **Counter-spectrum analytics** — firmware also pushes the low 8 bits of the accepted C counter; backend stores this in a separate table for analysis without altering legacy entropy measurements.
 - **Database** — MySQL/MariaDB with tables: `entropy_samples`, `generated_numbers`, `device_status`.
 - **Dashboard** — futuristic dark-theme web UI featuring:
   - Large animated 32-bit random number display
   - Glowing health LED (green = good bias / red = uncompensated bias)
-  - Accumulated raw bias line plot (Chart.js)
+  - Selectable entropy analysis stream: 1-bit legacy plus 2..8-bit views from counter snapshots
+  - Accumulated raw and modular-sum-corrected bias line plots (Chart.js)
   - Entropy scatter plot (16-bit values over time)
   - Date-range selector for all historical views
 
