@@ -287,9 +287,13 @@ function handleEntropy(): void {
     $totalRawBits = 0;
     $rawSeries = [];
     $correctedSeries = [];
+    $vonNeumannSeries = [];
     $corrAccum = [];
     $corrOnes = 0;
     $corrBits = 0;
+    $vnAccum = [];
+    $vnOnes = 0;
+    $vnBits = 0;
 
     foreach ($allRows as $index => $row) {
         $v = (int)$row['sample_value'];
@@ -308,10 +312,23 @@ function handleEntropy(): void {
                 $corrBits++;
                 $corrAccum = [];
             }
+
+            // Von Neumann: accumulate pairs, discard matching pairs, keep 01→0 and 10→1
+            $vnAccum[] = $bit;
+            if (count($vnAccum) >= 2) {
+                $pair = ($vnAccum[0] << 1) | $vnAccum[1];
+                if ($pair === 1 || $pair === 2) { // 01 or 10
+                    $vnOnes += ($pair === 2 ? 1 : 0); // 10 → 1, 01 → 0
+                    $vnBits++;
+                }
+                // 00 and 11 are discarded
+                $vnAccum = [];
+            }
         }
 
         $rawBias  = $totalRawBits > 0 ? abs($totalRawOnes / $totalRawBits - 0.5) : 0.0;
         $corrBias = $corrBits > 0 ? abs($corrOnes / $corrBits - 0.5) : 0.0;
+        $vnBias   = $vnBits > 0 ? abs($vnOnes / $vnBits - 0.5) : 0.0;
 
         $rawSeries[] = [
             'measurement' => $index + 1,
@@ -325,17 +342,25 @@ function handleEntropy(): void {
             'value'       => $v,
             'created_at'  => $row['created_at'],
         ];
+        $vonNeumannSeries[] = [
+            'measurement' => $index + 1,
+            'bias'        => round($vnBias, 6),
+            'value'       => $v,
+            'created_at'  => $row['created_at'],
+        ];
     }
 
     $rawZeros = max(0, $totalRawBits - $totalRawOnes);
     $rawBias  = $totalRawBits > 0 ? abs($totalRawOnes / $totalRawBits - 0.5) : 0.0;
     $corrBias = $corrBits > 0 ? abs($corrOnes / $corrBits - 0.5) : 0.0;
+    $vnBias   = $vnBits > 0 ? abs($vnOnes / $vnBits - 0.5) : 0.0;
 
     jsonOk([
         'samples'              => $displayRows,
         'bias_series'          => $rawSeries,
         'bias_series_raw'      => $rawSeries,
         'bias_series_corrected'=> $correctedSeries,
+        'bias_series_von_neumann' => $vonNeumannSeries,
         'stats' => [
             'reading_bits'         => $readingBits,
             'ones'                 => $totalRawOnes,
@@ -346,8 +371,10 @@ function handleEntropy(): void {
             'bias'                 => round($rawBias, 6),
             'raw_bias'             => round($rawBias, 6),
             'corrected_bias'       => round($corrBias, 6),
+            'von_neumann_bias'     => round($vnBias, 6),
             'modular_sum_bits'     => $modularSumBits,
             'corrected_total_bits' => $corrBits,
+            'von_neumann_total_bits' => $vnBits,
         ],
     ]);
 }

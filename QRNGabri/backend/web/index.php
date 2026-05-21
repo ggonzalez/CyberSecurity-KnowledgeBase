@@ -83,6 +83,7 @@ date_default_timezone_set('UTC');
           <div><dt>QUALITY BIAS</dt><dd id="statBiasQuality">—</dd></div>
           <div><dt>RAW BIAS</dt><dd id="statBiasRaw">—</dd></div>
           <div><dt>CORR. BIAS</dt><dd id="statBiasCorrected">—</dd></div>
+          <div><dt>VON NEUMANN</dt><dd id="statBiasVonNeumann">—</dd></div>
           <div><dt>TOTAL BITS</dt><dd id="statTotal">—</dd></div>
           <div><dt>ONES</dt><dd id="statOnes">—</dd></div>
           <div><dt>ZEROS</dt><dd id="statZeros">—</dd></div>
@@ -123,7 +124,12 @@ date_default_timezone_set('UTC');
           <select id="qualityBiasType" class="input-dark" style="margin-top:0.3rem">
             <option value="raw" selected>Raw Bias</option>
             <option value="corrected">Corrected Bias (modular sum)</option>
+            <option value="von_neumann">Von Neumann Corrected</option>
           </select>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:0.5rem">
+          <input type="checkbox" id="vonNeumannShow" style="width:1rem;height:1rem;cursor:pointer"/>
+          <label for="vonNeumannShow" style="font-size:0.65rem;color:var(--dim);letter-spacing:0.15em;text-transform:uppercase;cursor:pointer">Show Von Neumann on Plot</label>
         </div>
       </div>
       <div style="display:flex;gap:2rem;margin-top:0.5rem">

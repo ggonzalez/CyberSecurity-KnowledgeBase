@@ -72,7 +72,11 @@ function getSelectedReadingBits() {
 
 function getSelectedQualityType() {
     const v = $('qualityBiasType') ? $('qualityBiasType').value : 'raw';
-    return v === 'corrected' ? 'corrected' : 'raw';
+    return ['raw', 'corrected', 'von_neumann'].includes(v) ? v : 'raw';
+}
+
+function isVonNeumannShowing() {
+    return $('vonNeumannShow') ? $('vonNeumannShow').checked : false;
 }
 
 // ── Date range helpers ─────────────────────────────────────────────────────────
@@ -129,6 +133,18 @@ function initCharts() {
                 pointHitRadius: 10,
                 tension: 0.18,
                 fill: false,
+            }, {
+                label: 'Von Neumann',
+                data: [],
+                borderColor: '#ff6b9d',
+                backgroundColor: 'rgba(255,107,157,0.10)',
+                borderWidth: 2,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHitRadius: 10,
+                tension: 0.18,
+                fill: false,
+                hidden: true,
             }],
         },
         options: {
@@ -304,9 +320,12 @@ async function fetchEntropy() {
         const samples = data.samples || [];
         const biasSeriesRaw = data.bias_series_raw || data.bias_series || [];
         const biasSeriesCorrected = data.bias_series_corrected || [];
+        const biasSeriesVonNeumann = data.bias_series_von_neumann || [];
         const rawBias = resolveBiasValue(stats.raw_bias, resolveBiasValue(stats.bias, 0));
         const correctedBias = resolveBiasValue(stats.corrected_bias, 0);
-        const qualityBias = qualityType === 'corrected' ? correctedBias : rawBias;
+        const vonNeumannBias = resolveBiasValue(stats.von_neumann_bias, 0);
+        const qualityBias = qualityType === 'corrected' ? correctedBias : 
+                            qualityType === 'von_neumann' ? vonNeumannBias : rawBias;
 
         // Filter bias series to the selected date range for display
         // (bias values are still cumulative from full history – only the visible window changes)
@@ -319,6 +338,7 @@ async function fetchEntropy() {
         });
         const visibleRaw       = filterBySeries(biasSeriesRaw);
         const visibleCorrected = filterBySeries(biasSeriesCorrected);
+        const visibleVonNeumann = filterBySeries(biasSeriesVonNeumann);
 
         biasChart.data.datasets[0].data = visibleRaw.map(point => ({
             x: point.measurement,
@@ -330,7 +350,14 @@ async function fetchEntropy() {
             y: point.bias,
             value: point.value,
         }));
-        const mergedBias = visibleRaw.concat(visibleCorrected);
+        biasChart.data.datasets[2].data = visibleVonNeumann.map(point => ({
+            x: point.measurement,
+            y: point.bias,
+            value: point.value,
+        }));
+        biasChart.data.datasets[2].hidden = !isVonNeumannShowing();
+        
+        const mergedBias = visibleRaw.concat(visibleCorrected).concat(visibleVonNeumann);
         biasChart.options.scales.y.max = computeBiasAxisMax(mergedBias);
         biasChart.data.datasets[0].borderColor = getBiasColor(rawBias);
         biasChart.data.datasets[0].backgroundColor = getBiasFillColor(rawBias);
@@ -353,7 +380,7 @@ async function fetchEntropy() {
         scatterChart.update('none');
 
         // Update bias/stat cards
-        $('chartBias').textContent   = `${(rawBias * 100).toFixed(2)}% / ${(correctedBias * 100).toFixed(2)}%`;
+        $('chartBias').textContent   = `${(rawBias * 100).toFixed(2)}% / ${(correctedBias * 100).toFixed(2)}% / ${(vonNeumannBias * 100).toFixed(2)}%`;
         const totalMeasurements = stats.measurements ?? samples.length;
         const rangeMeasurements = stats.range_measurements ?? totalMeasurements;
         $('chartSamples').textContent = rangeMeasurements !== totalMeasurements
@@ -362,6 +389,10 @@ async function fetchEntropy() {
         $('statBiasQuality').textContent   = qualityBias.toFixed(4);
         $('statBiasRaw').textContent   = rawBias.toFixed(4);
         $('statBiasCorrected').textContent   = correctedBias.toFixed(4);
+        if ($('statBiasVonNeumann')) {
+            $('statBiasVonNeumann').textContent = vonNeumannBias.toFixed(4);
+            $('statBiasVonNeumann').style.color = getBiasColor(vonNeumannBias);
+        }
         $('statTotal').textContent  = (stats.total || 0).toLocaleString();
         $('statOnes').textContent   = (stats.ones || 0).toLocaleString();
         $('statZeros').textContent  = (stats.zeros || 0).toLocaleString();
@@ -434,6 +465,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if ($('qualityBiasType')) {
         $('qualityBiasType').addEventListener('change', () => {
             fetchEntropy();
+        });
+    }
+
+    if ($('vonNeumannShow')) {
+        $('vonNeumannShow').addEventListener('change', () => {
+            biasChart.data.datasets[2].hidden = !isVonNeumannShowing();
+            biasChart.update();
         });
     }
 });
