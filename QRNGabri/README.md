@@ -59,7 +59,7 @@ Radioactive decay is a fundamentally quantum process. The exact moment an atom d
 ### `backend/` — PHP REST API + Dashboard
 
 - **REST API** — PSK Bearer token auth, endpoints for entropy push, startup ping/auth connectivity checks, status, and random number retrieval.
-- **Counter-spectrum analytics** — firmware also pushes the low 8 bits of the accepted C counter; backend stores this in a separate table for analysis without altering legacy entropy measurements.
+- **Counter-spectrum analytics** — firmware uploads every accepted C_last value in batches to `POST /api/counter` (queued and retried on failure, back-dated by `age_ms`); backend stores the full value plus its low 8 bits in a separate table for analysis without altering legacy entropy measurements. `/api/push` still accepts the legacy `c_counter_8bit` field from older firmware.
 - **Database** — MySQL/MariaDB with tables: `entropy_samples`, `generated_numbers`, `device_status`.
 - **Dashboard** — futuristic dark-theme web UI featuring:
   - Large animated 32-bit random number display

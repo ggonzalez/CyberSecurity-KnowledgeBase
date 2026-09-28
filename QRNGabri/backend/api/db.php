@@ -54,6 +54,7 @@ function ensureSchema(PDO $pdo): void {
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             device_id VARCHAR(64) NOT NULL,
             counter_value TINYINT UNSIGNED NOT NULL,
+            c_last_value SMALLINT UNSIGNED NULL,
             source_entropy_sample_id BIGINT UNSIGNED NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_counter_device_time (device_id, created_at),
@@ -85,6 +86,18 @@ function ensureSchema(PDO $pdo): void {
 
     foreach ($schemaSql as $statement) {
         $pdo->exec($statement);
+    }
+
+    // Migrate tables created before c_last_value existed. A failure (e.g. no
+    // ALTER privilege) is logged instead of thrown so read endpoints keep working.
+    $hasCLast = $pdo->query("SHOW COLUMNS FROM entropy_counter_samples LIKE 'c_last_value'")->fetch();
+    if (!$hasCLast) {
+        try {
+            $pdo->exec('ALTER TABLE entropy_counter_samples
+                        ADD COLUMN c_last_value SMALLINT UNSIGNED NULL AFTER counter_value');
+        } catch (PDOException $e) {
+            error_log('QRNGabri: could not add entropy_counter_samples.c_last_value: ' . $e->getMessage());
+        }
     }
 
     $schemaReady = true;

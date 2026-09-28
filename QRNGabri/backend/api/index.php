@@ -4,10 +4,12 @@
  *
  * Routes:
  *   POST /api/push     – receive entropy packet from device  [requires PSK auth]
+ *   POST /api/counter  – receive batch of C_last values      [requires PSK auth]
  *   POST /api/ping     – connectivity/auth check with mock payload [requires PSK auth]
  *   GET  /api/status   – device health                       [requires PSK auth]
  *   GET  /api/random   – generated random numbers            [no auth – public read]
  *   GET  /api/entropy  – entropy history with bias stats     [no auth – public read]
+ *   GET  /api/raw-bits – unpacked raw bits + paired counter  [requires raw-bits PSK]
  */
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -55,6 +57,12 @@ switch (true) {
         handlePush();
         break;
 
+    // POST /counter – authenticated, device writes C_last log
+    case $path === '/counter' && $requestMethod === 'POST':
+        requireAuth();
+        handleCounterPush();
+        break;
+
     // POST /ping – authenticated connectivity check
     case $path === '/ping' && $requestMethod === 'POST':
         requireAuth();
@@ -75,6 +83,12 @@ switch (true) {
     // GET /entropy – public read
     case $path === '/entropy' && $requestMethod === 'GET':
         handleEntropy();
+        break;
+
+    // GET /raw-bits – authenticated with RAW_BITS_API_PSK
+    case $path === '/raw-bits' && $requestMethod === 'GET':
+        requireRawBitsAuth();
+        handleRawBits();
         break;
 
     default:

@@ -110,13 +110,13 @@ date_default_timezone_set('UTC');
           <label>READING TYPE</label><br>
           <select id="readingBits" class="input-dark" style="margin-top:0.3rem">
             <option value="1" selected>1-bit (current entropy stream)</option>
-            <option value="2">2-bit readings</option>
-            <option value="3">3-bit readings</option>
-            <option value="4">4-bit readings</option>
-            <option value="5">5-bit readings</option>
-            <option value="6">6-bit readings</option>
-            <option value="7">7-bit readings</option>
-            <option value="8">8-bit readings</option>
+            <option value="2">C_last low 2 bits (every reading)</option>
+            <option value="3">C_last low 3 bits (every reading)</option>
+            <option value="4">C_last low 4 bits (every reading)</option>
+            <option value="5">C_last low 5 bits (every reading)</option>
+            <option value="6">C_last low 6 bits (every reading)</option>
+            <option value="7">C_last low 7 bits (every reading)</option>
+            <option value="8">C_last low 8 bits (every reading)</option>
           </select>
         </div>
         <div>
@@ -135,7 +135,7 @@ date_default_timezone_set('UTC');
       <div style="display:flex;gap:2rem;margin-top:0.5rem">
         <div class="stat-block">
           <div class="stat-value" id="chartSamples">—</div>
-          <div class="stat-label">Packets (range / total)</div>
+          <div class="stat-label" id="chartSamplesLabel">Packets (range / total)</div>
         </div>
         <div class="stat-block">
           <div class="stat-value" id="chartBias" style="font-size:1.2rem">—</div>
@@ -167,7 +167,7 @@ date_default_timezone_set('UTC');
       <canvas id="biasChart"></canvas>
     </div>
     <div style="font-size:0.62rem;color:var(--dim);margin-top:0.75rem;text-align:center;letter-spacing:0.1em">
-      The line shows the accumulated absolute bias after each 16-bit measurement packet.
+      The line shows the accumulated absolute bias after each <span id="biasChartUnit">16-bit measurement packet</span>.
       Early measurements are noisy and not very meaningful; after a few hundred measurements the curve should start to stabilise.
       Green is healthy, orange is borderline, and red indicates the bias has moved outside the safe margin.
     </div>
@@ -175,11 +175,11 @@ date_default_timezone_set('UTC');
 
   <!-- ── Scatter Plot ────────────────────────────────────────────────────── -->
   <div class="panel" style="margin-bottom:1.5rem">
-    <div class="panel-title">&#9633; Entropy Dispersion — 16-bit Values Over Time</div>
+    <div class="panel-title">&#9633; Entropy Dispersion — <span id="scatterTitleUnit">16-bit Values</span> Over Time</div>
     <div class="chart-wrapper" style="height:300px">
       <canvas id="scatterChart"></canvas>
     </div>
-    <div style="font-size:0.62rem;color:var(--dim);margin-top:0.75rem;text-align:center;letter-spacing:0.1em">
+    <div style="font-size:0.62rem;color:var(--dim);margin-top:0.75rem;text-align:center;letter-spacing:0.1em" id="scatterNote">
       Each dot is a 16-bit entropy packet. Good QRNG: dots uniformly scattered across the full [0, 65535] range.
     </div>
   </div>

@@ -70,6 +70,24 @@ function getSelectedReadingBits() {
     return Math.min(8, Math.max(1, v));
 }
 
+// Mode-dependent wording: 1-bit reads 16-bit packets, 2..8-bit reads the C_last log.
+function updateModeLabels(readingBits) {
+    const isPacket = readingBits === 1;
+    const maxValue = isPacket ? 65535 : (1 << readingBits) - 1;
+    $('chartSamplesLabel').textContent = isPacket ? 'Packets (range / total)' : 'C_last readings (range / total)';
+    $('biasChartUnit').textContent     = isPacket ? '16-bit measurement packet' : `C_last reading (low ${readingBits} bits)`;
+    $('scatterTitleUnit').textContent  = isPacket ? '16-bit Values' : `C_last Low ${readingBits} Bits`;
+    $('scatterNote').textContent = isPacket
+        ? `Each dot is a 16-bit entropy packet. Good QRNG: dots uniformly scattered across the full [0, ${maxValue}] range.`
+        : `Each dot is one accepted C_last reading, masked to its low ${readingBits} bits. Good QRNG: dots uniformly scattered across [0, ${maxValue}].`;
+}
+
+function formatSampleValue(value, readingBits) {
+    return readingBits === 1
+        ? '0x' + value.toString(16).toUpperCase().padStart(4, '0')
+        : value.toString(10);
+}
+
 function getSelectedQualityType() {
     const v = $('qualityBiasType') ? $('qualityBiasType').value : 'raw';
     return ['raw', 'corrected', 'von_neumann'].includes(v) ? v : 'raw';
@@ -167,10 +185,7 @@ function initCharts() {
                             const pt = ctxArr[0].raw;
                             const n = ctxArr[0].parsed.x;
                             const v = pt && pt.value !== undefined ? pt.value : null;
-                            const rb = getSelectedReadingBits();
-                            const valStr = v === null ? '' : rb === 1
-                                ? `  ·  0x${v.toString(16).toUpperCase().padStart(4, '0')}`
-                                : `  ·  value: ${v}`;
+                            const valStr = v === null ? '' : `  ·  ${formatSampleValue(v, getSelectedReadingBits())}`;
                             return `Measurement #${n}${valStr}`;
                         },
                         label: ctx => {
@@ -234,7 +249,7 @@ function initCharts() {
                     borderColor: '#1a2e52',
                     borderWidth: 1,
                     callbacks: {
-                        label: ctx => ` 0x${ctx.parsed.y.toString(16).toUpperCase().padStart(4,'0')}  @ ${new Date(ctx.parsed.x).toLocaleTimeString()}`,
+                        label: ctx => ` ${formatSampleValue(ctx.parsed.y, getSelectedReadingBits())}  @ ${new Date(ctx.parsed.x).toLocaleTimeString()}`,
                     },
                 },
             },
@@ -371,13 +386,9 @@ async function fetchEntropy() {
         scatterChart.data.datasets[0].data = scatterData;
         scatterChart.options.scales.y.max = readingBits === 1 ? 65535 : ((1 << readingBits) - 1);
         scatterChart.options.scales.y.min = 0;
-        scatterChart.options.scales.y.ticks.callback = v => {
-            if (readingBits === 1) {
-                return '0x' + v.toString(16).toUpperCase().padStart(4, '0');
-            }
-            return v.toString(10);
-        };
+        scatterChart.options.scales.y.ticks.callback = v => formatSampleValue(v, readingBits);
         scatterChart.update('none');
+        updateModeLabels(readingBits);
 
         // Update bias/stat cards
         $('chartBias').textContent   = `${(rawBias * 100).toFixed(2)}% / ${(correctedBias * 100).toFixed(2)}% / ${(vonNeumannBias * 100).toFixed(2)}%`;

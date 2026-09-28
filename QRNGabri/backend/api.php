@@ -29,7 +29,7 @@ $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $rawPath = rtrim($requestUri, '/') ?: '/';
 
 // Accept only /api/<endpoint> forms in flat deployment.
-if (preg_match('#/api/(push|ping|status|random|entropy)$#', $rawPath, $m)) {
+if (preg_match('#/api/(push|counter|ping|status|random|entropy|raw-bits)$#', $rawPath, $m)) {
     $path = '/' . $m[1];
 } else {
     $path = $rawPath;
@@ -39,6 +39,11 @@ switch (true) {
     case $path === '/push' && $requestMethod === 'POST':
         requireAuth();
         handlePush();
+        break;
+
+    case $path === '/counter' && $requestMethod === 'POST':
+        requireAuth();
+        handleCounterPush();
         break;
 
     case $path === '/ping' && $requestMethod === 'POST':
@@ -57,6 +62,11 @@ switch (true) {
 
     case $path === '/entropy' && $requestMethod === 'GET':
         handleEntropy();
+        break;
+
+    case $path === '/raw-bits' && $requestMethod === 'GET':
+        requireRawBitsAuth();
+        handleRawBits();
         break;
 
     default:

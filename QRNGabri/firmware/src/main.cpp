@@ -16,9 +16,20 @@ static bool              g_staMode        = false;
 static QRNGWebServer*    g_webServer      = nullptr;
 static RadonEyeBLEClient g_bleClient;
 static std::string       g_bleAddress     = "";
-static volatile uint8_t  g_latestCounter8 = 0;
 static constexpr uint32_t ENTROPY_POLL_INTERVAL_MS = 120000;
 static constexpr uint32_t ENTROPY_MIN_ACCEPT_DELTA_SECONDS = 600;
+
+// ─── C_last log ───────────────────────────────────────────────────────────────
+// Every C_last fed into the entropy engine is queued here and uploaded to
+// /counter so the backend keeps the full sequence, not just one per packet.
+struct CounterSample {
+    uint16_t c_last;
+    uint32_t captured_ms;   ///< millis() at acceptance, sent as age_ms on upload
+};
+static constexpr size_t   COUNTER_QUEUE_LEN         = 256;
+static constexpr size_t   COUNTER_BATCH_MAX         = 32;
+static constexpr uint32_t COUNTER_RETRY_INTERVAL_MS = 30000;
+static QueueHandle_t      g_counterQueue            = nullptr;
 
 // ─── Wi-Fi helpers ────────────────────────────────────────────────────────────
 static bool connectSTA() {
@@ -53,7 +64,7 @@ static void startAP() {
  * POST a 16-bit entropy packet to the backend.
  * Returns true on HTTP 200/201.
  */
-static bool uploadPacket(uint16_t value, uint8_t counter8) {
+static bool uploadPacket(uint16_t value) {
     if (g_config.backend_url.isEmpty() || g_config.backend_psk.isEmpty()) {
         Serial.println("[Upload] Skipped: backend_url/backend_psk missing in config");
         return false;
@@ -76,13 +87,12 @@ static bool uploadPacket(uint16_t value, uint8_t counter8) {
 
     StaticJsonDocument<160> doc;
     doc["value"]     = value;
-    doc["c_counter_8bit"] = counter8;
     doc["device_id"] = WiFi.macAddress();
     String body;
     serializeJson(doc, body);
 
-    Serial.printf("[Upload] POST %s | value=0x%04X c8=0x%02X device_id=%s\n",
-                  url.c_str(), value, counter8, WiFi.macAddress().c_str());
+    Serial.printf("[Upload] POST %s | value=0x%04X device_id=%s\n",
+                  url.c_str(), value, WiFi.macAddress().c_str());
 
     int code = http.POST(body);
     String resp = http.getString();
@@ -94,6 +104,58 @@ static bool uploadPacket(uint16_t value, uint8_t counter8) {
     }
     Serial.printf("[Upload] ERROR HTTP %d for packet 0x%04X | response=%s\n",
                   code, value, resp.c_str());
+    return false;
+}
+
+/**
+ * POST a batch of accepted C_last values to the backend counter endpoint.
+ * Each sample carries its age so the server can back-date queued readings.
+ * Returns true on HTTP 200/201.
+ */
+static bool uploadCounterBatch(const CounterSample* samples, size_t count) {
+    if (g_config.backend_url.isEmpty() || g_config.backend_psk.isEmpty()) {
+        Serial.println("[Counter] Skipped: backend_url/backend_psk missing in config");
+        return false;
+    }
+    if (WiFi.status() != WL_CONNECTED && g_staMode) {
+        Serial.printf("[Counter] Skipped: STA not connected (WiFi.status=%d)\n", WiFi.status());
+        return false;
+    }
+
+    HTTPClient http;
+    String url = g_config.backend_url;
+    if (!url.endsWith("/")) url += "/";
+    url += "counter";
+
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "Bearer " + g_config.backend_psk);
+    http.setTimeout(8000);
+
+    DynamicJsonDocument doc(256 + count * 64);
+    doc["device_id"] = WiFi.macAddress();
+    JsonArray arr = doc.createNestedArray("samples");
+    uint32_t now = millis();
+    for (size_t i = 0; i < count; i++) {
+        JsonObject s = arr.createNestedObject();
+        s["c_last"] = samples[i].c_last;
+        s["age_ms"] = now - samples[i].captured_ms;
+    }
+    String body;
+    serializeJson(doc, body);
+
+    Serial.printf("[Counter] POST %s | %u sample(s) device_id=%s\n",
+                  url.c_str(), static_cast<unsigned>(count), WiFi.macAddress().c_str());
+
+    int code = http.POST(body);
+    String resp = http.getString();
+    http.end();
+
+    if (code == 200 || code == 201) {
+        Serial.printf("[Counter] Success HTTP %d | response=%s\n", code, resp.c_str());
+        return true;
+    }
+    Serial.printf("[Counter] ERROR HTTP %d | response=%s\n", code, resp.c_str());
     return false;
 }
 
@@ -149,6 +211,22 @@ static bool pingBackend() {
 // ─── FreeRTOS tasks ───────────────────────────────────────────────────────────
 
 /**
+ * Feed an accepted C_last into the entropy engine and queue it for /counter.
+ * If the queue is full the oldest sample is dropped to keep the newest ones.
+ */
+static void acceptCLast(int16_t cLast) {
+    g_entropy.feedCNow(cLast);
+
+    CounterSample sample{static_cast<uint16_t>(cLast), millis()};
+    if (xQueueSend(g_counterQueue, &sample, 0) != pdTRUE) {
+        CounterSample dropped;
+        xQueueReceive(g_counterQueue, &dropped, 0);
+        xQueueSend(g_counterQueue, &sample, 0);
+        Serial.printf("[Counter] Queue full, dropped oldest C_last=%u\n", dropped.c_last);
+    }
+}
+
+/**
  * entropy_task – polls the RadonEye BLE periodically and feeds accepted C_last
  * values into the entropy engine.
  */
@@ -172,8 +250,7 @@ static void entropyTask(void* /*pvParam*/) {
                               static_cast<unsigned long>(uptime.uptime_seconds));
 
                 if (!entropyPrimed) {
-                    g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
-                    g_entropy.feedCNow(reading.c_last); // Prime baseline; first call emits no bit.
+                    acceptCLast(reading.c_last); // Prime baseline; first call emits no bit.
                     entropyPrimed = true;
                     Serial.println("[Entropy] Baseline primed with current C_last");
                 }
@@ -181,14 +258,12 @@ static void entropyTask(void* /*pvParam*/) {
                 if (!hasAcceptedUptime) {
                     lastAcceptedUptimeSeconds = uptime.uptime_seconds;
                     lastAcceptedCLast = reading.c_last;
-                    g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
                     hasAcceptedUptime = true;
                     Serial.println("[Entropy] First accepted sample reference captured; waiting for new C_last or 10-minute timeout");
                 } else if (uptime.uptime_seconds < lastAcceptedUptimeSeconds) {
                     // Device likely rebooted or uptime counter reset; re-baseline uptime gate.
                     lastAcceptedUptimeSeconds = uptime.uptime_seconds;
                     lastAcceptedCLast = reading.c_last;
-                    g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
                     Serial.println("[Entropy] Uptime decreased/reset; re-baselining uptime gate");
                 } else {
                     uint32_t elapsed = uptime.uptime_seconds - lastAcceptedUptimeSeconds;
@@ -198,8 +273,7 @@ static void entropyTask(void* /*pvParam*/) {
                         int16_t previousCLast = lastAcceptedCLast;
                         lastAcceptedUptimeSeconds = uptime.uptime_seconds;
                         lastAcceptedCLast = reading.c_last;
-                        g_latestCounter8 = static_cast<uint8_t>(reading.c_last) & 0xFFu;
-                        g_entropy.feedCNow(reading.c_last);
+                        acceptCLast(reading.c_last);
 
                         if (cLastChanged && elapsed < ENTROPY_MIN_ACCEPT_DELTA_SECONDS) {
                             Serial.printf("[Entropy] C_last changed (%d -> %d) after %lus; accepted immediately and reset timer\n",
@@ -246,14 +320,20 @@ static void entropyTask(void* /*pvParam*/) {
 }
 
 /**
- * upload_task – drains pending entropy packets to the backend.
+ * upload_task – drains pending entropy packets and C_last samples to the backend.
  */
 static void uploadTask(void* /*pvParam*/) {
+    // C_last samples stay in this batch until the server acknowledges them.
+    static CounterSample counterBatch[COUNTER_BATCH_MAX];
+    static size_t   counterBatchCount    = 0;
+    static bool     counterRetryPending  = false;
+    static uint32_t lastCounterAttemptMs = 0;
+
     while (true) {
         if (g_entropy.pendingPackets() > 0) {
             EntropyPacket pkt{};
             if (g_entropy.popPacket(pkt)) {
-                bool ok = uploadPacket(pkt.value, g_latestCounter8);
+                bool ok = uploadPacket(pkt.value);
                 if (ok) {
                     Serial.printf("[Upload] Sent packet 0x%04X\n", pkt.value);
                 } else {
@@ -267,6 +347,26 @@ static void uploadTask(void* /*pvParam*/) {
                 }
             }
         }
+
+        CounterSample sample;
+        while (counterBatchCount < COUNTER_BATCH_MAX &&
+               xQueueReceive(g_counterQueue, &sample, 0) == pdTRUE) {
+            counterBatch[counterBatchCount++] = sample;
+        }
+        if (counterBatchCount > 0 &&
+            (!counterRetryPending || millis() - lastCounterAttemptMs >= COUNTER_RETRY_INTERVAL_MS)) {
+            lastCounterAttemptMs = millis();
+            if (uploadCounterBatch(counterBatch, counterBatchCount)) {
+                counterBatchCount   = 0;
+                counterRetryPending = false;
+            } else {
+                counterRetryPending = true;
+                Serial.printf("[Counter] Upload failed, retrying %u sample(s) in %lus\n",
+                              static_cast<unsigned>(counterBatchCount),
+                              static_cast<unsigned long>(COUNTER_RETRY_INTERVAL_MS / 1000));
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -313,6 +413,7 @@ void setup() {
     }
 
     // ── FreeRTOS tasks ───────────────────────────────────────────────────────
+    g_counterQueue = xQueueCreate(COUNTER_QUEUE_LEN, sizeof(CounterSample));
     xTaskCreatePinnedToCore(entropyTask, "entropy", 8192, nullptr, 2, nullptr, 0);
     xTaskCreatePinnedToCore(uploadTask,  "upload",  8192, nullptr, 1, nullptr, 0);
 

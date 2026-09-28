@@ -35,6 +35,9 @@ QRNGabri-plan.md
 QRNGabri/firmware/data/qrngabri.cfg
 QRNGabri/backend/config/config.php
 
+# QRNGabri local DB snapshots (recorded device data)
+QRNGabri/db-snapshots/
+
 # QRNGabri PlatformIO build artifacts and vendored dependencies
 QRNGabri/firmware/.pio/
 

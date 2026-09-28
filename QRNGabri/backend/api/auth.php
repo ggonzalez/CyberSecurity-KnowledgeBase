@@ -23,6 +23,14 @@ foreach ($configCandidates as $candidate) {
  * Sends a 401 JSON response and exits if invalid.
  */
 function requireAuth(): void {
+    requireConfiguredAuth('API_PSK');
+}
+
+function requireRawBitsAuth(): void {
+    requireConfiguredAuth('RAW_BITS_API_PSK');
+}
+
+function requireConfiguredAuth(string $configConstant): void {
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 
     if (empty($header)) {
@@ -35,9 +43,17 @@ function requireAuth(): void {
     }
 
     $token = substr($header, 7);
+    if (!defined($configConstant)) {
+        sendServerConfigError('Missing auth configuration');
+    }
+
+    $expectedToken = constant($configConstant);
+    if (!is_string($expectedToken) || $expectedToken === '') {
+        sendServerConfigError('Empty auth configuration');
+    }
 
     // Constant-time comparison to prevent timing side-channels
-    if (!defined('API_PSK') || !hash_equals(API_PSK, $token)) {
+    if (!hash_equals($expectedToken, $token)) {
         sendAuthError('Invalid PSK token');
     }
 }
@@ -46,5 +62,12 @@ function sendAuthError(string $message): void {
     http_response_code(401);
     header('Content-Type: application/json');
     echo json_encode(['error' => 'Unauthorized', 'message' => $message]);
+    exit;
+}
+
+function sendServerConfigError(string $message): void {
+    http_response_code(500);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Server Misconfiguration', 'message' => $message]);
     exit;
 }

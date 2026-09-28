@@ -20,11 +20,13 @@ CREATE TABLE IF NOT EXISTS entropy_samples (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ── entropy_counter_samples ────────────────────────────────────────────────
--- Stores per-upload 8-bit counter snapshots from the device for extra analysis.
+-- Stores every accepted C_last value from the device (POST /api/counter) for
+-- extra analysis. Legacy firmware wrote one 8-bit snapshot per /api/push.
 CREATE TABLE IF NOT EXISTS entropy_counter_samples (
     id                      BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     device_id               VARCHAR(64)      NOT NULL,
     counter_value           TINYINT UNSIGNED NOT NULL,   -- low 8 bits of C counter
+    c_last_value            SMALLINT UNSIGNED NULL,      -- full C_last (NULL for legacy rows)
     source_entropy_sample_id BIGINT UNSIGNED NULL,       -- linked entropy_samples.id when available
     created_at              DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_counter_device_time (device_id, created_at),

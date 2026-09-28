@@ -4,10 +4,12 @@
  *
  * Handlers for:
  *   POST /api/push    – receive entropy packets from device
+ *   POST /api/counter – receive batches of accepted C_last values
  *   POST /api/ping    – connectivity/auth test with mock payload
  *   GET  /api/status  – device health summary
  *   GET  /api/random  – latest generated random number + history
  *   GET  /api/entropy – entropy sample history (with optional date range)
+ *   GET  /api/raw-bits – unpacked raw bit stream with paired C-pulse bytes
  */
 
 require_once __DIR__ . '/db.php';
@@ -95,6 +97,71 @@ function handlePush(): void {
     }
 
     jsonOk($response, 201);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/counter
+// Body (JSON):
+// {
+//   "device_id": "AA:BB:CC:DD:EE:FF",
+//   "samples": [ { "c_last": 1234, "age_ms": 5000 }, ... ]
+// }
+// age_ms is how long ago the device accepted the reading; the row is back-dated
+// by that amount so queued/retried samples keep their real acquisition time.
+// ─────────────────────────────────────────────────────────────────────────────
+const COUNTER_BATCH_MAX = 64;
+const COUNTER_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+
+function handleCounterPush(): void {
+    $body = file_get_contents('php://input');
+    $data = json_decode($body, true);
+
+    if (!is_array($data)) {
+        jsonError(400, 'Invalid JSON body');
+    }
+
+    $deviceId = trim((string)($data['device_id'] ?? ''));
+    if (!preg_match('/^[0-9A-Fa-f:]{11,17}$/', $deviceId)) {
+        jsonError(400, 'Invalid device_id format');
+    }
+
+    $samples = $data['samples'] ?? null;
+    if (!is_array($samples) || count($samples) === 0 || array_keys($samples) !== range(0, count($samples) - 1)) {
+        jsonError(400, 'samples must be a non-empty array');
+    }
+    if (count($samples) > COUNTER_BATCH_MAX) {
+        jsonError(400, 'samples exceeds maximum length of ' . COUNTER_BATCH_MAX);
+    }
+
+    $rows = [];
+    foreach ($samples as $i => $sample) {
+        if (!is_array($sample)) {
+            jsonError(400, 'samples[' . $i . '] must be an object');
+        }
+        $cLast = $sample['c_last'] ?? null;
+        if (!is_int($cLast) || $cLast < 0 || $cLast > 65535) {
+            jsonError(400, 'samples[' . $i . '].c_last must be an integer in [0, 65535]');
+        }
+        $ageMs = $sample['age_ms'] ?? 0;
+        if (!is_int($ageMs) || $ageMs < 0 || $ageMs > COUNTER_MAX_AGE_MS) {
+            jsonError(400, 'samples[' . $i . '].age_ms must be an integer in [0, ' . COUNTER_MAX_AGE_MS . ']');
+        }
+        $rows[] = [$cLast, intdiv($ageMs, 1000)];
+    }
+
+    $db = getDB();
+    $stmt = $db->prepare(
+        'INSERT INTO entropy_counter_samples (device_id, counter_value, c_last_value, created_at)
+          VALUES (?, ?, ?, NOW() - INTERVAL ? SECOND)'
+    );
+
+    $db->beginTransaction();
+    foreach ($rows as [$cLast, $ageSeconds]) {
+        $stmt->execute([$deviceId, $cLast & 0xFF, $cLast, $ageSeconds]);
+    }
+    $db->commit();
+
+    jsonOk(['status' => 'ok', 'stored' => count($rows)], 201);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -251,12 +318,17 @@ function handleEntropy(): void {
 
     $sql = "SELECT id, device_id, {$valueColumn} AS sample_value, created_at FROM {$sourceTable}";
     if ($where) $sql .= ' WHERE ' . implode(' AND ', $where);
-    $sql .= ' ORDER BY created_at DESC LIMIT ?';
-    $params[] = $limit;
+    $sql .= ' ORDER BY created_at DESC, id DESC LIMIT ?';
 
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    $stmt->execute(array_merge($params, [$limit]));
     $displayRows = $stmt->fetchAll();
+
+    $countSql = "SELECT COUNT(*) FROM {$sourceTable}";
+    if ($where) $countSql .= ' WHERE ' . implode(' AND ', $where);
+    $stmt = $db->prepare($countSql);
+    $stmt->execute($params);
+    $rangeCount = (int)$stmt->fetchColumn();
 
     // Mask display values to selected bit width for scatter chart
     if ($readingBits > 1) {
@@ -274,15 +346,24 @@ function handleEntropy(): void {
 
     $biasSql = "SELECT {$valueColumn} AS sample_value, created_at FROM {$sourceTable}";
     if ($biasWhere) $biasSql .= ' WHERE ' . implode(' AND ', $biasWhere);
-    $biasSql .= ' ORDER BY created_at ASC LIMIT 5000';
+    $biasSql .= ' ORDER BY created_at ASC, id ASC';
 
     $stmt = $db->prepare($biasSql);
     $stmt->execute($biasParams);
-    $allRows = $stmt->fetchAll();
 
     $modularSumBits = getDeviceModularSumBits($db, $deviceId);
 
-    // Compute bias series over the full history
+    // Compute bias over the full history. Series points are only emitted for
+    // rows inside the selected range, thinned to at most BIAS_SERIES_MAX_POINTS
+    // so the payload stays small as the C_last log grows.
+    $fromTs = $from ? $from . ' 00:00:00' : null;
+    $toTs   = $to   ? $to   . ' 23:59:59' : null;
+    $stride = max(1, (int)ceil($rangeCount / BIAS_SERIES_MAX_POINTS));
+    $sampleBitWidth = $readingBits === 1 ? 16 : $readingBits;
+    $measurements = 0;
+    $rangeIndex = 0;
+    $pendingPoint = null;   // last in-range point, kept so the series always ends on it
+
     $totalRawOnes = 0;
     $totalRawBits = 0;
     $rawSeries = [];
@@ -295,9 +376,9 @@ function handleEntropy(): void {
     $vnOnes = 0;
     $vnBits = 0;
 
-    foreach ($allRows as $index => $row) {
+    while ($row = $stmt->fetch()) {
+        $measurements++;
         $v = (int)$row['sample_value'];
-        $sampleBitWidth = $readingBits === 1 ? 16 : $readingBits;
 
         for ($b = 0; $b < $sampleBitWidth; $b++) {
             $bit = ($v >> $b) & 0x01;
@@ -326,28 +407,26 @@ function handleEntropy(): void {
             }
         }
 
-        $rawBias  = $totalRawBits > 0 ? abs($totalRawOnes / $totalRawBits - 0.5) : 0.0;
-        $corrBias = $corrBits > 0 ? abs($corrOnes / $corrBits - 0.5) : 0.0;
-        $vnBias   = $vnBits > 0 ? abs($vnOnes / $vnBits - 0.5) : 0.0;
+        $createdAt = $row['created_at'];
+        if (($fromTs !== null && $createdAt < $fromTs) || ($toTs !== null && $createdAt > $toTs)) {
+            continue;
+        }
 
-        $rawSeries[] = [
-            'measurement' => $index + 1,
-            'bias'        => round($rawBias, 6),
+        $pendingPoint = [
+            'measurement' => $measurements,
             'value'       => $v,
-            'created_at'  => $row['created_at'],
+            'created_at'  => $createdAt,
+            'raw'         => $totalRawBits > 0 ? abs($totalRawOnes / $totalRawBits - 0.5) : 0.0,
+            'corrected'   => $corrBits > 0 ? abs($corrOnes / $corrBits - 0.5) : 0.0,
+            'von_neumann' => $vnBits > 0 ? abs($vnOnes / $vnBits - 0.5) : 0.0,
         ];
-        $correctedSeries[] = [
-            'measurement' => $index + 1,
-            'bias'        => round($corrBias, 6),
-            'value'       => $v,
-            'created_at'  => $row['created_at'],
-        ];
-        $vonNeumannSeries[] = [
-            'measurement' => $index + 1,
-            'bias'        => round($vnBias, 6),
-            'value'       => $v,
-            'created_at'  => $row['created_at'],
-        ];
+        if ($rangeIndex++ % $stride === 0) {
+            appendBiasPoint($pendingPoint, $rawSeries, $correctedSeries, $vonNeumannSeries);
+            $pendingPoint = null;
+        }
+    }
+    if ($pendingPoint !== null) {
+        appendBiasPoint($pendingPoint, $rawSeries, $correctedSeries, $vonNeumannSeries);
     }
 
     $rawZeros = max(0, $totalRawBits - $totalRawOnes);
@@ -366,8 +445,8 @@ function handleEntropy(): void {
             'ones'                 => $totalRawOnes,
             'zeros'                => $rawZeros,
             'total'                => $totalRawBits,
-            'measurements'         => count($allRows),
-            'range_measurements'   => count($displayRows),
+            'measurements'         => $measurements,
+            'range_measurements'   => $rangeCount,
             'bias'                 => round($rawBias, 6),
             'raw_bias'             => round($rawBias, 6),
             'corrected_bias'       => round($corrBias, 6),
@@ -384,8 +463,81 @@ function handleEntropy(): void {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/raw-bits?device_id=...&after_id=0&limit=1000
+// Returns one row per unpacked raw bit, preserving the original acquisition
+// order inside each stored 16-bit packet.
+// ─────────────────────────────────────────────────────────────────────────────
+function handleRawBits(): void {
+    $limit    = min(5000, max(1, (int)($_GET['limit'] ?? 1000)));
+    $afterId  = max(0, (int)($_GET['after_id'] ?? 0));
+    $deviceId = $_GET['device_id'] ?? null;
+
+    if ($deviceId !== null && !preg_match('/^[0-9A-Fa-f:]{11,17}$/', $deviceId)) {
+        jsonError(400, 'Invalid device_id');
+    }
+
+    $db = getDB();
+
+    $where = ['s.id > ?'];
+    $params = [$afterId];
+
+    if ($deviceId) {
+        $where[] = 's.device_id = ?';
+        $params[] = $deviceId;
+    }
+
+    $sql = 'SELECT s.id, s.device_id, s.sample_value, s.created_at, c.counter_value
+            FROM entropy_samples s
+            LEFT JOIN entropy_counter_samples c
+              ON c.source_entropy_sample_id = s.id
+            WHERE ' . implode(' AND ', $where) . '
+            ORDER BY s.id ASC
+            LIMIT ?';
+    $params[] = $limit;
+
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
+
+    $entries = [];
+    $lastSampleId = null;
+    foreach ($rows as $row) {
+        $lastSampleId = (int)$row['id'];
+        $entries[] = [
+            'bit'  => (int)$row['sample_value'] & 0xFFFF,
+            'byte' => $row['counter_value'] !== null ? (int)$row['counter_value'] : null,
+        ];
+    }
+
+    jsonOk([
+        'bits' => $entries,
+        'meta' => [
+            'device_id'       => $deviceId,
+            'after_id'        => $afterId,
+            'last_sample_id'  => $lastSampleId,
+            'packets_returned'=> count($rows),
+            'bits_returned'   => count($entries),
+            'next_after_id'   => count($rows) === $limit ? $lastSampleId : null,
+        ],
+    ]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+const BIAS_SERIES_MAX_POINTS = 2000;
+
+function appendBiasPoint(array $point, array &$raw, array &$corrected, array &$vonNeumann): void {
+    $base = [
+        'measurement' => $point['measurement'],
+        'value'       => $point['value'],
+        'created_at'  => $point['created_at'],
+    ];
+    $raw[]        = $base + ['bias' => round($point['raw'], 6)];
+    $corrected[]  = $base + ['bias' => round($point['corrected'], 6)];
+    $vonNeumann[] = $base + ['bias' => round($point['von_neumann'], 6)];
+}
 
 function upsertDeviceStatus(PDO $db, string $deviceId,
                             bool $modSum, int $modSumBits): void {
