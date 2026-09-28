@@ -420,6 +420,8 @@ body::after {
 }
 
 .input-dark:focus { border-color: var(--neon2); }
+.input-dark:disabled,
+.btn:disabled { opacity: 0.35; cursor: not-allowed; box-shadow: none; }
 
 .btn {
   font-family: var(--display);
@@ -438,6 +440,26 @@ body::after {
   font-weight: 700;
 }
 .btn-primary:hover { box-shadow: var(--glow-c); }
+
+.toggle-group {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.btn-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+}
+.btn-toggle:hover { border-color: var(--neon2); color: var(--text); }
+.btn-toggle.active {
+  background: linear-gradient(90deg, #007a60, var(--neon));
+  border-color: transparent;
+  color: #000;
+  font-weight: 700;
+}
 
 /* ── Recent numbers table ────────────────────────────────────────────────────── */
 .data-table {

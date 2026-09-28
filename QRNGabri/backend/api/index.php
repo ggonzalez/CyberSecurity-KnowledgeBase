@@ -9,6 +9,7 @@
  *   GET  /api/status   – device health                       [requires PSK auth]
  *   GET  /api/random   – generated random numbers            [no auth – public read]
  *   GET  /api/entropy  – entropy history with bias stats     [no auth – public read]
+ *   GET  /api/samples  – packet or C_last values for scatter [no auth – public read]
  *   GET  /api/raw-bits – unpacked raw bits + paired counter  [requires raw-bits PSK]
  */
 
@@ -83,6 +84,11 @@ switch (true) {
     // GET /entropy – public read
     case $path === '/entropy' && $requestMethod === 'GET':
         handleEntropy();
+        break;
+
+    // GET /samples – public read
+    case $path === '/samples' && $requestMethod === 'GET':
+        handleSamples();
         break;
 
     // GET /raw-bits – authenticated with RAW_BITS_API_PSK

@@ -18,6 +18,16 @@ let biasChart    = null;
 let scatterChart = null;
 let autoRefreshTimer = null;
 
+// Per-viewer view settings, remembered across the page's periodic reloads.
+function loadSetting(key, fallback) {
+    try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+}
+function saveSetting(key, value) {
+    try { localStorage.setItem(key, value); } catch { /* storage unavailable */ }
+}
+let scatterSource = loadSetting('qrng.scatterSource', 'packets') === 'clast' ? 'clast' : 'packets';
+let lifetimeRange = loadSetting('qrng.lifetime', '0') === '1';
+
 // ── Utility ────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
@@ -73,13 +83,22 @@ function getSelectedReadingBits() {
 // Mode-dependent wording: 1-bit reads 16-bit packets, 2..8-bit reads the C_last log.
 function updateModeLabels(readingBits) {
     const isPacket = readingBits === 1;
-    const maxValue = isPacket ? 65535 : (1 << readingBits) - 1;
-    $('chartSamplesLabel').textContent = isPacket ? 'Packets (range / total)' : 'C_last readings (range / total)';
+        $('chartSamplesLabel').textContent = isPacket ? 'Packets (range / total)' : 'C_last readings (range / total)';
     $('biasChartUnit').textContent     = isPacket ? '16-bit measurement packet' : `C_last reading (low ${readingBits} bits)`;
-    $('scatterTitleUnit').textContent  = isPacket ? '16-bit Values' : `C_last Low ${readingBits} Bits`;
-    $('scatterNote').textContent = isPacket
-        ? `Each dot is a 16-bit entropy packet. Good QRNG: dots uniformly scattered across the full [0, ${maxValue}] range.`
-        : `Each dot is one accepted C_last reading, masked to its low ${readingBits} bits. Good QRNG: dots uniformly scattered across [0, ${maxValue}].`;
+}
+
+function updateScatterLabels(total, shown) {
+    const isPacket = scatterSource === 'packets';
+    $('scatterTitleUnit').textContent = isPacket ? '16-bit Packets' : 'C_last Values';
+    const thinned = total > shown ? ` Showing ${shown.toLocaleString()} of ${total.toLocaleString()} points, evenly spread over the range.` : '';
+    $('scatterNote').textContent = (isPacket
+        ? 'Each dot is a 16-bit entropy packet built from 16 one-bit readings. Good QRNG: dots uniformly scattered across [0, 65535].'
+        : 'Each dot is one accepted C_last reading (pulse count of a 10-minute window). Expect a Poisson-like band around the mean count, not a uniform spread.') + thinned;
+    document.querySelectorAll('[data-scatter-source]').forEach(btn => {
+        const active = btn.dataset.scatterSource === scatterSource;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', String(active));
+    });
 }
 
 function formatSampleValue(value, readingBits) {
@@ -106,10 +125,17 @@ function getDefaultRange() {
 }
 
 function getRange() {
+    if (lifetimeRange) return { from: null, to: null };
     return {
         from: $('dateFrom').value || getDefaultRange().from,
         to:   $('dateTo').value   || getDefaultRange().to,
     };
+}
+
+// Query-string fragment for the current range; empty for lifetime.
+function rangeQuery() {
+    const { from, to } = getRange();
+    return from && to ? `&from=${from}&to=${to}` : '';
 }
 
 // ── Chart initialisation ───────────────────────────────────────────────────────
@@ -249,7 +275,7 @@ function initCharts() {
                     borderColor: '#1a2e52',
                     borderWidth: 1,
                     callbacks: {
-                        label: ctx => ` ${formatSampleValue(ctx.parsed.y, getSelectedReadingBits())}  @ ${new Date(ctx.parsed.x).toLocaleTimeString()}`,
+                        label: ctx => ` ${formatSampleValue(ctx.parsed.y, scatterSource === 'packets' ? 1 : 0)}  @ ${new Date(ctx.parsed.x).toLocaleString()}`,
                     },
                 },
             },
@@ -327,7 +353,7 @@ async function fetchEntropy() {
     const readingBits = getSelectedReadingBits();
     const qualityType = getSelectedQualityType();
     try {
-        const res = await fetch(`${API_BASE}/entropy?from=${from}&to=${to}&limit=2000&reading_bits=${readingBits}`);
+        const res = await fetch(`${API_BASE}/entropy?limit=2000&reading_bits=${readingBits}${rangeQuery()}`);
         if (!res.ok) return;
         const data = await res.json();
 
@@ -378,16 +404,6 @@ async function fetchEntropy() {
         biasChart.data.datasets[0].backgroundColor = getBiasFillColor(rawBias);
         biasChart.update();
 
-        // Update scatter chart
-        const scatterData = samples.map(s => ({
-            x: new Date(s.created_at + 'Z').getTime(),
-            y: s.sample_value,
-        }));
-        scatterChart.data.datasets[0].data = scatterData;
-        scatterChart.options.scales.y.max = readingBits === 1 ? 65535 : ((1 << readingBits) - 1);
-        scatterChart.options.scales.y.min = 0;
-        scatterChart.options.scales.y.ticks.callback = v => formatSampleValue(v, readingBits);
-        scatterChart.update('none');
         updateModeLabels(readingBits);
 
         // Update bias/stat cards
@@ -418,6 +434,36 @@ async function fetchEntropy() {
     }
 }
 
+async function fetchSamples() {
+    const source = scatterSource;
+    try {
+        const res = await fetch(`${API_BASE}/samples?source=${source}&limit=2000${rangeQuery()}`);
+        if (!res.ok || source !== scatterSource) return;   // ignore stale responses after a toggle
+        const data = await res.json();
+        const samples = data.samples || [];
+
+        scatterChart.data.datasets[0].data = samples.map(s => ({
+            x: new Date(s.created_at + 'Z').getTime(),
+            y: s.value,
+        }));
+        const yScale = scatterChart.options.scales.y;
+        if (source === 'packets') {
+            yScale.min = 0;
+            yScale.max = 65535;
+            yScale.ticks.callback = v => formatSampleValue(v, 1);
+        } else {
+            const peak = samples.reduce((m, s) => Math.max(m, s.value), 0);
+            yScale.min = 0;
+            yScale.max = Math.max(4, Math.ceil(peak * 1.1));
+            yScale.ticks.callback = v => Number.isInteger(v) ? v.toString(10) : '';
+        }
+        scatterChart.update('none');
+        updateScatterLabels(data.total ?? samples.length, samples.length);
+    } catch (e) {
+        console.warn('Samples fetch failed', e);
+    }
+}
+
 // ── Table renderers ────────────────────────────────────────────────────────────
 function renderRandomTable(rows) {
     const tbody = $('randomTbody');
@@ -441,7 +487,7 @@ function renderRandomTable(rows) {
 
 // ── Refresh orchestration ──────────────────────────────────────────────────────
 async function refreshAll() {
-    await Promise.all([fetchRandom(), fetchEntropy()]);
+    await Promise.all([fetchRandom(), fetchEntropy(), fetchSamples()]);
 }
 
 function startAutoRefresh() {
@@ -464,8 +510,35 @@ document.addEventListener('DOMContentLoaded', () => {
     if (applyBtn) {
         applyBtn.addEventListener('click', () => {
             fetchEntropy();
+            fetchSamples();
         });
     }
+
+    const setDateInputsEnabled = enabled => {
+        ['dateFrom', 'dateTo', 'applyRange'].forEach(id => { if ($(id)) $(id).disabled = !enabled; });
+    };
+    if ($('lifetimeRange')) {
+        $('lifetimeRange').checked = lifetimeRange;
+        setDateInputsEnabled(!lifetimeRange);
+        $('lifetimeRange').addEventListener('change', e => {
+            lifetimeRange = e.target.checked;
+            saveSetting('qrng.lifetime', lifetimeRange ? '1' : '0');
+            setDateInputsEnabled(!lifetimeRange);
+            fetchEntropy();
+            fetchSamples();
+        });
+    }
+
+    document.querySelectorAll('[data-scatter-source]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.scatterSource === scatterSource) return;
+            scatterSource = btn.dataset.scatterSource;
+            saveSetting('qrng.scatterSource', scatterSource);
+            updateScatterLabels(0, 0);
+            fetchSamples();
+        });
+    });
+    updateScatterLabels(0, 0);
 
     if ($('readingBits')) {
         $('readingBits').addEventListener('change', () => {

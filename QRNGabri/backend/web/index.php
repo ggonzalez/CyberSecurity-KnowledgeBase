@@ -104,6 +104,10 @@ date_default_timezone_set('UTC');
           <input type="date" id="dateTo" class="input-dark" style="margin-top:0.3rem"/>
         </div>
         <button id="applyRange" class="btn btn-primary" style="align-self:flex-end">APPLY</button>
+        <div style="display:flex;align-items:center;gap:0.5rem;align-self:flex-end;padding-bottom:0.35rem">
+          <input type="checkbox" id="lifetimeRange" style="width:1rem;height:1rem;cursor:pointer"/>
+          <label for="lifetimeRange" style="cursor:pointer">Lifetime</label>
+        </div>
       </div>
       <div class="chart-controls" style="margin-top:0.8rem">
         <div>
@@ -175,7 +179,11 @@ date_default_timezone_set('UTC');
 
   <!-- ── Scatter Plot ────────────────────────────────────────────────────── -->
   <div class="panel" style="margin-bottom:1.5rem">
-    <div class="panel-title">&#9633; Entropy Dispersion — <span id="scatterTitleUnit">16-bit Values</span> Over Time</div>
+    <div class="panel-title">&#9633; Entropy Dispersion — <span id="scatterTitleUnit">16-bit Packets</span> Over Time</div>
+    <div class="toggle-group" role="group" aria-label="Scatter data source">
+      <button type="button" class="btn btn-toggle active" data-scatter-source="packets" aria-pressed="true">16-BIT PACKETS</button>
+      <button type="button" class="btn btn-toggle" data-scatter-source="clast" aria-pressed="false">C_LAST VALUES</button>
+    </div>
     <div class="chart-wrapper" style="height:300px">
       <canvas id="scatterChart"></canvas>
     </div>

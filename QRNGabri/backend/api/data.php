@@ -9,6 +9,7 @@
  *   GET  /api/status  – device health summary
  *   GET  /api/random  – latest generated random number + history
  *   GET  /api/entropy – entropy sample history (with optional date range)
+ *   GET  /api/samples – packet or C_last values for the dispersion plot
  *   GET  /api/raw-bits – unpacked raw bit stream with paired C-pulse bytes
  */
 
@@ -289,20 +290,9 @@ function handleRandom(): void {
 // ─────────────────────────────────────────────────────────────────────────────
 function handleEntropy(): void {
     $limit    = min(5000, max(1, (int)($_GET['limit'] ?? 500)));
-    $deviceId = $_GET['device_id'] ?? null;
-    $from     = $_GET['from'] ?? null;
-    $to       = $_GET['to']   ?? null;
     $readingBits = min(8, max(1, (int)($_GET['reading_bits'] ?? 1)));
-
-    if ($deviceId !== null && !preg_match('/^[0-9A-Fa-f:]{11,17}$/', $deviceId)) {
-        jsonError(400, 'Invalid device_id');
-    }
-    if ($from !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) {
-        jsonError(400, 'Invalid from date format (YYYY-MM-DD)');
-    }
-    if ($to !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
-        jsonError(400, 'Invalid to date format (YYYY-MM-DD)');
-    }
+    ['device_id' => $deviceId, 'from' => $from, 'to' => $to,
+     'where' => $where, 'params' => $params] = parseRangeFilters();
 
     $db = getDB();
 
@@ -310,12 +300,6 @@ function handleEntropy(): void {
     $valueColumn = $readingBits === 1 ? 'sample_value' : 'counter_value';
 
     // ── Range-filtered display samples (scatter chart / sample list) ─────────
-    $where  = [];
-    $params = [];
-    if ($deviceId) { $where[] = 'device_id = ?'; $params[] = $deviceId; }
-    if ($from)     { $where[] = 'created_at >= ?'; $params[] = $from . ' 00:00:00'; }
-    if ($to)       { $where[] = 'created_at <= ?'; $params[] = $to   . ' 23:59:59'; }
-
     $sql = "SELECT id, device_id, {$valueColumn} AS sample_value, created_at FROM {$sourceTable}";
     if ($where) $sql .= ' WHERE ' . implode(' AND ', $where);
     $sql .= ' ORDER BY created_at DESC, id DESC LIMIT ?';
@@ -463,6 +447,60 @@ function handleEntropy(): void {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/samples?source=packets|clast&from=YYYY-MM-DD&to=YYYY-MM-DD&device_id=...&limit=2000
+// Values for the dispersion scatter: 16-bit packets (entropy_samples) or actual
+// C_last values (entropy_counter_samples). Omit from/to for lifetime. When the
+// range holds more than `limit` rows they are thinned evenly across it.
+// Legacy counter rows have no c_last_value; their low-8-bit counter_value is
+// used instead (equal to C_last whenever C_last < 256).
+// ─────────────────────────────────────────────────────────────────────────────
+function handleSamples(): void {
+    $source = $_GET['source'] ?? 'packets';
+    if (!in_array($source, ['packets', 'clast'], true)) {
+        jsonError(400, 'source must be packets or clast');
+    }
+    $limit = min(5000, max(1, (int)($_GET['limit'] ?? 2000)));
+    ['where' => $where, 'params' => $params] = parseRangeFilters();
+
+    $table     = $source === 'packets' ? 'entropy_samples' : 'entropy_counter_samples';
+    $valueExpr = $source === 'packets' ? 'sample_value' : 'COALESCE(c_last_value, counter_value)';
+    $whereSql  = $where ? ' WHERE ' . implode(' AND ', $where) : '';
+
+    $db = getDB();
+    $stmt = $db->prepare("SELECT COUNT(*) FROM {$table}{$whereSql}");
+    $stmt->execute($params);
+    $total  = (int)$stmt->fetchColumn();
+    $stride = max(1, (int)ceil($total / $limit));
+
+    $stmt = $db->prepare(
+        "SELECT id, {$valueExpr} AS value, created_at FROM {$table}{$whereSql} ORDER BY created_at ASC, id ASC"
+    );
+    $stmt->execute($params);
+
+    $samples = [];
+    $last = null;
+    for ($i = 0; $row = $stmt->fetch(); $i++) {
+        $row['value'] = (int)$row['value'];
+        if ($i % $stride === 0) {
+            $samples[] = $row;
+            $last = null;
+        } else {
+            $last = $row;   // keep the newest row so the plot always ends at "now"
+        }
+    }
+    if ($last !== null) {
+        $samples[] = $last;
+    }
+
+    jsonOk([
+        'source'  => $source,
+        'total'   => $total,
+        'stride'  => $stride,
+        'samples' => $samples,
+    ]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/raw-bits?device_id=...&after_id=0&limit=1000
 // Returns one row per unpacked raw bit, preserving the original acquisition
 // order inside each stored 16-bit packet.
@@ -527,6 +565,35 @@ function handleRawBits(): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BIAS_SERIES_MAX_POINTS = 2000;
+
+/**
+ * Validate the optional device_id / from / to query parameters and build the
+ * matching WHERE clauses. Missing from/to means no date bound (lifetime).
+ */
+function parseRangeFilters(): array {
+    $deviceId = $_GET['device_id'] ?? null;
+    $from     = $_GET['from'] ?? null;
+    $to       = $_GET['to']   ?? null;
+
+    if ($deviceId !== null && !preg_match('/^[0-9A-Fa-f:]{11,17}$/', $deviceId)) {
+        jsonError(400, 'Invalid device_id');
+    }
+    if ($from !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) {
+        jsonError(400, 'Invalid from date format (YYYY-MM-DD)');
+    }
+    if ($to !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
+        jsonError(400, 'Invalid to date format (YYYY-MM-DD)');
+    }
+
+    $where  = [];
+    $params = [];
+    if ($deviceId) { $where[] = 'device_id = ?';   $params[] = $deviceId; }
+    if ($from)     { $where[] = 'created_at >= ?'; $params[] = $from . ' 00:00:00'; }
+    if ($to)       { $where[] = 'created_at <= ?'; $params[] = $to   . ' 23:59:59'; }
+
+    return ['device_id' => $deviceId, 'from' => $from, 'to' => $to,
+            'where' => $where, 'params' => $params];
+}
 
 function appendBiasPoint(array $point, array &$raw, array &$corrected, array &$vonNeumann): void {
     $base = [
