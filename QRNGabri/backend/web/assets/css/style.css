@@ -5,23 +5,23 @@
 
 /* ── Variables ─────────────────────────────────────────────────────────────── */
 :root {
-  --bg:        #060c18;
-  --bg2:       #0a1122;
-  --panel:     #0d1628;
-  --border:    #1a2e52;
-  --neon:      #00ffcc;
-  --neon2:     #00aaff;
-  --neon3:     #8b5cf6;
+  --bg:        #0f172a;
+  --bg2:       #131f35;
+  --panel:     #1e293b;
+  --border:    #334155;
+  --neon:      #60a5fa;
+  --neon2:     #3b82f6;
+  --neon3:     #7c3aed;
   --danger:    #ff4422;
-  --warning:   #ffaa00;
-  --text:      #c0d4f0;
-  --dim:       #3d5580;
+  --warning:   #f59e0b;
+  --text:      #e2e8f0;
+  --dim:       #64748b;
   --mono:      'Share Tech Mono', monospace;
   --display:   'Orbitron', sans-serif;
   --glow-g:    0 0 10px #00ff88, 0 0 30px #00ff8866, 0 0 60px #00ff8833;
   --glow-r:    0 0 10px #ff4422, 0 0 30px #ff442266, 0 0 60px #ff442233;
-  --glow-c:    0 0 10px #00ffcc, 0 0 30px #00ffcc44;
-  --glow-b:    0 0 10px #00aaff, 0 0 30px #00aaff44;
+  --glow-c:    0 0 10px #60a5fa, 0 0 30px #60a5fa44;
+  --glow-b:    0 0 10px #3b82f6, 0 0 30px #3b82f644;
   --transition: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -37,8 +37,8 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   background-image:
-    radial-gradient(ellipse at 20% 20%, rgba(0,255,204,0.03) 0%, transparent 60%),
-    radial-gradient(ellipse at 80% 80%, rgba(0,170,255,0.03) 0%, transparent 60%);
+    radial-gradient(ellipse at 20% 20%, rgba(37,99,235,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 80%, rgba(96,165,250,0.06) 0%, transparent 60%);
 }
 
 /* ── Typography ──────────────────────────────────────────────────────────────── */
@@ -132,7 +132,7 @@ body::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at center, rgba(0,255,204,0.04) 0%, transparent 70%);
+  background: radial-gradient(ellipse at center, rgba(96,165,250,0.06) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -235,7 +235,7 @@ body::after {
 }
 
 .panel:hover {
-  border-color: rgba(0,255,204,0.3);
+  border-color: rgba(96,165,250,0.35);
 }
 
 .panel::before {
@@ -407,7 +407,7 @@ body::after {
 }
 
 .input-dark {
-  background: #060c18;
+  background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
   padding: 0.4rem 0.6rem;
@@ -435,8 +435,8 @@ body::after {
 }
 
 .btn-primary {
-  background: linear-gradient(90deg, #007a60, var(--neon));
-  color: #000;
+  background: linear-gradient(90deg, #1d4ed8, var(--neon));
+  color: #fff;
   font-weight: 700;
 }
 .btn-primary:hover { box-shadow: var(--glow-c); }
@@ -455,9 +455,9 @@ body::after {
 }
 .btn-toggle:hover { border-color: var(--neon2); color: var(--text); }
 .btn-toggle.active {
-  background: linear-gradient(90deg, #007a60, var(--neon));
+  background: linear-gradient(90deg, #1d4ed8, var(--neon));
   border-color: transparent;
-  color: #000;
+  color: #fff;
   font-weight: 700;
 }
 
@@ -481,13 +481,13 @@ body::after {
 
 .data-table td {
   padding: 0.55rem 0.75rem;
-  border-bottom: 1px solid rgba(26,46,82,0.5);
+  border-bottom: 1px solid rgba(51,65,85,0.6);
   color: var(--text);
   vertical-align: middle;
   font-family: var(--mono);
 }
 
-.data-table tr:hover td { background: rgba(0,255,204,0.02); }
+.data-table tr:hover td { background: rgba(96,165,250,0.04); }
 
 .badge {
   display: inline-block;
@@ -528,4 +528,40 @@ body::after {
   letter-spacing: 0.15em;
   border-top: 1px solid var(--border);
   margin-top: 2rem;
+}
+
+/* ── Parent-site back-link bar ───────────────────────────────────────────────── */
+.parent-site-bar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 0.55rem 1.5rem;
+}
+
+.parent-site-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  text-decoration: none;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  transition: color 0.2s;
+}
+
+.parent-site-link:hover { color: var(--neon); }
+
+.parent-site-logo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  filter: brightness(0) invert(0.55);
+  transition: filter 0.2s;
+}
+
+.parent-site-link:hover .parent-site-logo { filter: brightness(0) invert(1) sepia(1) saturate(2) hue-rotate(190deg); }
+
+.parent-site-arrow {
+  font-size: 0.65rem;
+  opacity: 0.6;
 }

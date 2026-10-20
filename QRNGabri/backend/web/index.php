@@ -27,6 +27,14 @@ date_default_timezone_set('UTC');
 </head>
 <body>
 
+<div class="parent-site-bar">
+    <a href="https://www.gabrielcybersecurity.com/" target="_blank" rel="noopener noreferrer" class="parent-site-link">
+      <img src="https://www.gabrielcybersecurity.com/assets/images/logo.svg" alt="Gabriel Cybersecurity" class="parent-site-logo" />
+      <span>gabrielcybersecurity.com</span>
+      <span class="parent-site-arrow">↗</span>
+    </a>
+  </div>
+
 <div class="app-wrapper">
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
